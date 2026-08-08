@@ -118,6 +118,34 @@ export class LlmFailed extends Error {
   }
 }
 
+/**
+ * Turns a provider error into one sentence a customer can act on.
+ *
+ * Says what failed and what to do, and nothing about the request body. An
+ * error message is a place credentials and prompt text leak by accident, so
+ * only the status, the provider's own message and the model name cross over.
+ */
+export function describeProviderError(error: unknown, model: string): string {
+  const status = (error as { status?: number })?.status;
+  const detail =
+    (error as { error?: { error?: { message?: string } } })?.error?.error?.message ??
+    (error instanceof Error ? error.message : String(error));
+
+  if (status === 401 || status === 403) {
+    return `The language model rejected the API key, so the question was not read. Check ANTHROPIC_API_KEY, or set AI_PROVIDER=mock. No answer was produced.`;
+  }
+  if (status === 429) {
+    return `The language model is rate limited, so the question was not read. Try again shortly. No answer was produced.`;
+  }
+  if (status === 400) {
+    return `The language model rejected the request for model "${model}": ${detail}. The question was not read and no answer was produced.`;
+  }
+  if (status && status >= 500) {
+    return `The language model is unavailable (HTTP ${status}), so the question was not read. No answer was produced.`;
+  }
+  return `The language model could not be reached, so the question was not read: ${detail}. No answer was produced.`;
+}
+
 export interface IntentReader {
   read(question: string): Promise<{ intent: RawIntent; provider: string; model: string }>;
 }
@@ -136,15 +164,28 @@ class AnthropicReader implements IntentReader {
   }
 
   async read(question: string) {
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 1024,
-      temperature: 0,
-      system: SYSTEM_PROMPT,
-      tools: [FILTER_TOOL],
-      tool_choice: { type: 'tool', name: FILTER_TOOL.name },
-      messages: [{ role: 'user', content: question }],
-    });
+    /**
+     * No `temperature`. Claude Sonnet 5 rejects it, and it was never what made
+     * this repeatable. The forced tool call fixes the shape, zod re-checks it,
+     * and the block and variety lists fix the vocabulary. A sampling knob was
+     * never load-bearing next to those three.
+     */
+    let response: Anthropic.Message;
+    try {
+      response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        tools: [FILTER_TOOL],
+        tool_choice: { type: 'tool', name: FILTER_TOOL.name },
+        messages: [{ role: 'user', content: question }],
+      });
+    } catch (error) {
+      // The provider failing is a failure to read the question, not a crash.
+      // It has to leave by the same door as every other failure, or it
+      // surfaces as a bare 500 with no reason and no answer_kg: null.
+      throw new LlmFailed(describeProviderError(error, this.model));
+    }
 
     // Guard 2. Read the whole reply as text before trusting any of it.
     if (containsCanary(response.content)) {

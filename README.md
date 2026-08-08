@@ -47,7 +47,7 @@ filter that was worked out.
 ## Checking it
 
 ```bash
-npm test        # 21 unit tests, no database and no network needed
+npm test        # 26 unit tests, no database and no network needed
 npm run verify  # 17 checks against the loaded data
 ```
 

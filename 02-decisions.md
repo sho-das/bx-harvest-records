@@ -168,6 +168,22 @@ The number, what the question was understood to mean, the rows counted, every ro
 
 Reason: this is the direct answer to "a wrong number cannot reach the customer". The customer sees the figure, sees what is not in it, and can move a parked row into it by answering one question. `understood_as` shows what the system thought the question meant, which is where a wrong number usually starts.
 
+### C5. No `temperature` is sent
+
+Reason: Claude Sonnet 5 rejects the parameter outright, with a 400. It was there for determinism, and determinism was never coming from it. The forced tool call fixes the shape of the reply, zod re-checks that shape, and the block and variety lists fix the vocabulary. A sampling knob was never load-bearing next to those three, so removing it costs nothing.
+
+Second reason, and the one that matters more: if a sampling setting had been holding this together, the system was already wrong. A filter that is only correct at temperature 0 is a filter with no guard on it.
+
+### C6. Any failure in the model layer returns `answer_kg: null` and a reason
+
+A rejected key, a rate limit, an outage, a malformed reply, a canary hit - all of them leave by the same door. HTTP 502, `answered: false`, `answer_kg: null`, and one sentence saying what failed and what to do about it.
+
+Reason: the provider 400 above surfaced to the customer as a bare `{"statusCode":500}`. No reason, and no `answer_kg` field at all. A client reading `answer_kg` off that response gets `undefined`, and `undefined` becomes 0 in enough places to matter. A refusal has to be as explicit as an answer.
+
+The message says what failed and what to do, and nothing about the request. An error message is where credentials and prompt text leak by accident, so only the status, the provider's own message and the model name cross the boundary. Checked by a test that asserts a key never appears in the reason.
+
+Every one of these messages also says "no answer was produced" in words. `answer_kg: null` already carries it, but words cannot be misread by a client that was looking for a number.
+
 ## D. Build choices
 
 ### D1. Raw SQL with the `pg` driver, not an ORM

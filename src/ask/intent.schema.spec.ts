@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { RawIntentSchema, checkIntent, IntentRejected } from './intent.schema';
-import { containsCanary, CANARY, SYSTEM_PROMPT } from './llm';
+import { containsCanary, CANARY, SYSTEM_PROMPT, describeProviderError } from './llm';
 
 const GOOD = {
   understood: true,
@@ -97,6 +97,58 @@ describe('null means all, not none', () => {
     expect(filter.variety).toBe('Sweetheart');
     // On this file that filter returns 8617.439, not 3170.000. Null is not a
     // quiet way of saying "no rows".
+  });
+});
+
+describe('a provider that fails leaves by the same door as every other failure', () => {
+  // The real one, copied from a live run. It reached the customer as a bare
+  // {"statusCode":500} with no reason and no answer_kg field at all.
+  const rejected = {
+    status: 400,
+    message: '400 {"type":"error","error":{...}}',
+    error: {
+      type: 'error',
+      error: { type: 'invalid_request_error', message: '`temperature` is deprecated for this model.' },
+    },
+  };
+
+  it('a rejected request says what the provider said and which model', () => {
+    const reason = describeProviderError(rejected, 'claude-sonnet-5');
+    expect(reason).toContain('`temperature` is deprecated for this model.');
+    expect(reason).toContain('claude-sonnet-5');
+    expect(reason).toContain('no answer was produced');
+  });
+
+  it('a bad key says to check the key, and never prints it', () => {
+    const reason = describeProviderError({ status: 401, message: 'x-api-key: sk-ant-secret' }, 'm');
+    expect(reason).toContain('ANTHROPIC_API_KEY');
+    expect(reason).toContain('AI_PROVIDER=mock');
+    expect(reason).not.toContain('sk-ant-secret');
+  });
+
+  it('rate limiting and outages say so rather than blaming the question', () => {
+    expect(describeProviderError({ status: 429 }, 'm')).toContain('rate limited');
+    expect(describeProviderError({ status: 503 }, 'm')).toContain('unavailable');
+  });
+
+  it('a plain network error still produces a sentence, never an empty reason', () => {
+    const reason = describeProviderError(new Error('ECONNREFUSED'), 'm');
+    expect(reason).toContain('ECONNREFUSED');
+    expect(reason.length).toBeGreaterThan(20);
+  });
+
+  it('no message ever contains a number that could be read as a weight', () => {
+    const messages = [
+      describeProviderError(rejected, 'claude-sonnet-5'),
+      describeProviderError({ status: 401 }, 'm'),
+      describeProviderError({ status: 429 }, 'm'),
+      describeProviderError(new Error('boom'), 'm'),
+    ];
+    // Every one of these travels with answer_kg: null. Saying "no answer was
+    // produced" in words as well costs nothing and cannot be misread.
+    for (const message of messages) {
+      expect(message.toLowerCase()).toContain('no answer was produced');
+    }
   });
 });
 

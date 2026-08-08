@@ -11,7 +11,7 @@ Longer versions of everything here: [`01-data-analysis.md`](01-data-analysis.md)
 - One table holding all 26 lines of the file, including the blank line 13 and the `TOTAL` line 27. A four-value `status` column decides what is countable.
 - `POST /ask`. The model turns English into a filter. Postgres produces every number.
 - Parked rows: the file does not settle three of the seven Block 3 Sweetheart rows, so each comes back as a question with options, and each option is priced.
-- 21 unit tests, a check constraint in Postgres, and `npm run verify` (17 checks).
+- 26 unit tests, a check constraint in Postgres, and `npm run verify` (17 checks).
 
 ## What I deliberately did not build
 
@@ -76,11 +76,23 @@ any reply containing it is discarded unread. A filter naming a block or variety
 that does not exist is refused with the list of real ones, never answered with
 0 kg - an empty result and a wrong filter look identical to a customer.
 
+No `temperature` is sent. Claude Sonnet 5 rejects the parameter, and it was
+never what made this repeatable: the forced tool call fixes the shape, zod
+re-checks it, and the block and variety lists fix the vocabulary. A filter that
+is only correct at temperature 0 is a filter with no guard on it.
+
+Every failure in the model layer leaves by the same door. A rejected key, a rate
+limit, an outage, a malformed reply, a canary hit: all return HTTP 502 with
+`answered: false`, `answer_kg: null`, and one sentence saying what failed and
+what to do. The message carries the status, the provider's own message and the
+model name, and nothing from the request - an error message is where credentials
+leak by accident, and a test asserts a key never appears in one.
+
 ## How I checked the output was right
 
 Three layers, each catching what the others cannot.
 
-1. **21 unit tests**, each named after a real line in the CSV. Two assert a negative, because the negative is the decision: `record lost` must not equal 0, and a blank unit must not equal kg.
+1. **26 unit tests**, each named after a real line in the CSV or a way the model layer can fail. Two assert a negative, because the negative is the decision: `record lost` must not equal 0, and a blank unit must not equal kg.
 2. **A check constraint in Postgres.** A row cannot be `counted` unless block, variety, date and kilograms are all present. It lives in the database, so no code path avoids it. I probed it both ways.
 3. **`npm run verify`, 17 checks,** including a diagnostic table. Three rows can each be wrongly added and one wrongly dropped, and each mistake produces its own number: 2,180 means the `sweethart` lookup did not fire; 4,320 means line 16 was not superseded; 4,350 means the date was read as 4 March; 4,380 means line 11 was filled; 8,617.439 means the block filter did not apply. A failing run names the file to open.
 
@@ -102,14 +114,16 @@ What I checked rather than accepted:
 - Every number in `02-decisions.md` was then recomputed from the raw file by script - 33 assertions, all passing - before the file was written.
 - `npm run verify` exists because "the total looks right" is not a check. It asserts which lines produced the total and what each wrong total would mean.
 
-Two bugs the tests and probes caught that review would not have:
+Three bugs that review would not have found. The first two came from running it,
+the third came from a customer seeing the output:
 
 - The `pg` driver returns a `DATE` as a JavaScript `Date` at midnight local time. This machine runs Asia/Kolkata, so 2026-03-12 crossed as 2026-03-11T18:30:00Z. That is a silent off-by-one-day answer. Fixed at the driver: `DATE` now comes back as the string Postgres wrote.
 - Dependency injection returned `undefined` at runtime while the typecheck was clean. `tsx` compiles with esbuild, which cannot emit `emitDecoratorMetadata`, so NestJS saw no constructor types. `tsc` validates that flag; esbuild ignores it. Fixed by compiling with `tsc` and running the output.
+- The first live call failed: Claude Sonnet 5 rejects `temperature`, which I had set to 0 for determinism it was not providing. Worse than the 400 was how it arrived - a bare `{"statusCode":500}`, no reason and no `answer_kg` field at all. A client reading `answer_kg` off that gets `undefined`, and `undefined` becomes 0 in enough places to matter. Only a live run surfaces that; no unit test was going to.
 
 ## What I am not happy about
 
-- **The live model call was never run.** No API key was available in this environment, so `POST /ask` has only been exercised through the mock provider. The guards are unit-tested without a network and the SQL path is verified end to end, but the one thing I cannot claim is that a real model produces a well-formed filter for this question. That is the first thing I would do with an API key.
+- **The live model call was only proved by its failure.** The first attempt returned a 400 on `temperature`, which is fixed, and the failure path is now verified end to end with a deliberately invalid key: HTTP 502, `answer_kg: null`, a reason, and no key in the log. What I have not yet watched is a real model returning a well-formed filter for this question and the endpoint answering 3,170.000 off it. Everything under that call is verified; the call itself is one run away.
 - **`quantity_kg` is `NUMERIC(12,3)`,** so 1210 lb stores as 548.847 rather than the exact 548.8467677. Grams is finer than anything this file records, but it is a rounding I chose rather than one the data forced.
 - **`selectNotCountedRows` and `selectParkedRows` overlap.** A parked row appears in both, once with its question as a reason and once with its priced options. It is honest but it is duplication in the response.
 - **The correction-linking rule reads a date out of free text.** "correction to 12/03" is parsed, both readings are tried, and block plus variety must leave exactly one row. It works here and it is guarded, but a note phrased differently would silently produce an unlinked correction rather than an error.
