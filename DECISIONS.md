@@ -11,6 +11,7 @@ Longer versions of everything here: [`01-data-analysis.md`](01-data-analysis.md)
 - One table holding all 26 lines of the file, including the blank line 13 and the `TOTAL` line 27. A four-value `status` column decides what is countable.
 - `POST /ask`. The model turns English into a filter. Postgres produces every number.
 - Parked rows: the file does not settle three of the seven Block 3 Sweetheart rows, so each comes back as a question with options, and each option is priced.
+- A page at `GET /`. One HTML file, plain CSS, vanilla JS, no build step and no new dependency. It calls `/ask` and nothing else.
 - 28 unit tests, a check constraint in Postgres, and `npm run verify` (21 checks against the loaded data).
 
 ## What I deliberately did not build
@@ -87,6 +88,37 @@ limit, an outage, a malformed reply, a canary hit: all return HTTP 502 with
 what to do. The message carries the status, the provider's own message and the
 model name, and nothing from the request - an error message is where credentials
 leak by accident, and a test asserts a key never appears in one.
+
+## The page
+
+It shows the exact `curl` for whatever is in the question box, built from the
+same body string it sends. Displaying the command and making the call from one
+string is the only way the page can be shown to do nothing the endpoint does not
+do. There is one `fetch` in the file and it goes to `/ask`.
+
+Selecting a parked option shows what the answer would become. It writes nothing.
+Confirming a park for real is a write path that does not exist, and the page says
+that rather than pretending otherwise.
+
+**The one place the page does arithmetic, and why it had to.** Each park is
+priced against the base answer once, when the response arrives: its delta is
+`answer_becomes_kg` minus `answer_kg`. Selections then add up. The obvious
+alternative - showing the selected option's `answer_becomes_kg` as the total -
+is wrong the moment two parks are open. Choosing kg on line 11 and 4 March on
+line 5 would read 4,380.000 instead of 5,560.000, because each park's figure is
+computed against the base and not against each other. So the page adds, in whole
+thousandths with `BigInt`, never in floating point. I checked all six
+combinations against a live response.
+
+Line 5 read as 3 April has a delta of +0.000, because the row falls outside
+March. It is shown as +0.000 rather than hidden: answering a question and having
+it change nothing is a result, not a non-event.
+
+**Two things that must not look alike, and do not.** Block 9 returns a refusal
+with the reason where the number goes and no tables at all. Regina in Block 3
+returns 0.000 with the tables present and empty, under the line "No rows matched.
+That is the answer, not a failure." The page branches on `answered` alone, which
+is the only field that separates them.
 
 ## How I checked the output was right
 

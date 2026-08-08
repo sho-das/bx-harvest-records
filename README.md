@@ -27,7 +27,7 @@ npm run import                # reads data/harvest-records-2026.csv
 npm start                     # compiles with tsc, then serves on :3000
 ```
 
-Ask it:
+Open <http://localhost:3000> for the page, or ask it from the terminal:
 
 ```bash
 curl -s -X POST localhost:3000/ask \
@@ -38,6 +38,12 @@ curl -s -X POST localhost:3000/ask \
 `POST`, not `GET` with a query parameter. A question written in English needs
 URL encoding, and a URL is written to the access log of every proxy it passes
 through. A body is not.
+
+The page at `/` calls that same endpoint and nothing else. It shows the exact
+`curl` for whatever is typed in the box, built from the same body string it
+sends, so it cannot display one request and make another. Selecting a parked
+option shows what the answer would become. It writes nothing - there is no
+write path, and the page says so.
 
 Without an API key, set `AI_PROVIDER=mock` in `.env`. The mock returns one
 fixed filter and does not read the question. The response says
@@ -138,6 +144,9 @@ src/
   ask/queries.ts                 the statements that produce every number
   ask/ask.service.ts             model, then guard, then Postgres
   ask/ask.controller.ts          POST /ask
+  ui/ui.controller.ts            GET / , returns public/index.html
+public/
+  index.html                     the whole UI: one file, no build step
 scripts/
   import.ts                      npm run import
   verify.ts                      npm run verify
