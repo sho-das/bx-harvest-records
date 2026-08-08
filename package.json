@@ -5,7 +5,7 @@
   "description": "One endpoint that answers a harvest question, with its exclusions attached.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "tsx src/main.ts",
+    "start": "npm run build && node dist/src/main.js",
     "migrate": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f src/db/migrations/001_init.sql",
     "import": "tsx scripts/import.ts",
     "test": "vitest run"
