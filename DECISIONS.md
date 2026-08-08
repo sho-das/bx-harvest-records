@@ -8,7 +8,7 @@ Longer versions of everything here: [`01-data-analysis.md`](01-data-analysis.md)
 
 ## What I built
 
-- One table holding all 26 data lines, including the blank line 13 and the `TOTAL` line 27. A four-value `status` column decides what is countable.
+- Three tables. `harvest_record` holds all 26 data lines, including the blank line 13 and the `TOTAL` line 27, and a four-value `status` column decides what is countable. `parked_question` and `parked_option` carry the questions the file leaves open.
 - `POST /ask`. The model turns English into a filter. Postgres produces every number.
 - Parked rows: the file does not settle three of the seven Block 3 Sweetheart rows, so each comes back as a question with options, and each option is priced.
 - A page at `GET /`. One HTML file, plain CSS, vanilla JS, no build step and no new dependency. It calls `/ask` and nothing else.
@@ -123,16 +123,6 @@ Line 5 read as 3 April has a delta of +0.000, because the row falls outside
 March. It is shown as +0.000 rather than hidden: answering a question and having
 it change nothing is a result, not a non-event.
 
-A whole park is a different matter, and the page found a bug there. Asking about
-4 March showed all three parks, and two of them could not have mattered: line 11
-is dated 9 March and no reading of its unit changes a date. Every option read
-"answer 0.000". The parked query was filtering on block and variety but not on
-date, while the not-counted query filtered on all three, so the same response
-listed line 11 as waiting on an answer and did not list it among the rows left
-out. A park is now returned only when at least one reading of it lands in range.
-Ask about June and line 5 goes too, because 4 March and 3 April are both outside
-it. Seven checks in `npm run verify` hold the two views to the same rule.
-
 **Two things that must not look alike, and do not.** Block 9 returns a refusal
 with the reason where the number goes and no tables at all. Regina in Block 3
 returns 0.000 with the tables present and empty, under the line "No rows matched.
@@ -165,21 +155,23 @@ What I checked rather than accepted:
 - Every number in `02-decisions.md` was then recomputed from the raw file by script - 33 assertions, all passing - before the file was written.
 - `npm run verify` exists because "the total looks right" is not a check. It asserts which lines produced the total and what each wrong total would mean.
 
-Four bugs that review would not have found. Two came from running the code, two
-from running it against the live model:
+Five bugs that review would not have found, and they came three different ways.
+Two from running the code, two from running it against the live model, and one
+from looking at the page:
 
 - The `pg` driver returns a `DATE` as a JavaScript `Date` at midnight local time. This machine runs Asia/Kolkata, so 2026-03-12 crossed as 2026-03-11T18:30:00Z. That is a silent off-by-one-day answer. Fixed at the driver: `DATE` now comes back as the string Postgres wrote.
 - Dependency injection returned `undefined` at runtime while the typecheck was clean. `tsx` compiles with esbuild, which cannot emit `emitDecoratorMetadata`, so NestJS saw no constructor types. `tsc` validates that flag; esbuild ignores it. Fixed by compiling with `tsc` and running the output.
 - The first live call failed: Claude Sonnet 5 rejects `temperature`, which I had set to 0 for determinism it was not providing. Worse than the 400 was how it arrived - a bare `{"statusCode":500}`, no reason and no `answer_kg` field at all. A client reading `answer_kg` off that gets `undefined`, and `undefined` becomes 0 in enough places to matter. Only a live run surfaces that; no unit test was going to.
 - Asking about Regina in Block 3 returned `answer_kg: "0"` where every other question returns `"3170.000"`. `SUM` over no rows is NULL and the literal 0 replacing it is an integer, so a valid question with no matching rows came back in a different shape from one with rows. Fixed by casting the fallback to `NUMERIC(12,3)` in both places it appears. Nothing in the test suite reached it, because the suite only ever asked questions that had an answer.
+- The page showed parks that could not matter. Asking about 4 March listed all three, and two of them were dead: line 11 is dated 9 March, and no reading of its unit changes a date, so every option read "answer 0.000". The parked query filtered on block and variety; the not-counted query filtered on all three. So one response listed line 11 as waiting on an answer and did not list it among the rows left out - two views of the same row contradicting each other on one screen. A park is now returned only when at least one of its own readings lands in range, and asking about June drops line 5 as well. Seven checks hold the two queries to the same rule. Nothing in the API surfaced this: the field was populated and the numbers in it were correct. It took seeing the three blocks side by side.
 
 The live run of the guards is what turned this from a claim into a check. Block 9
 was refused with the list of real blocks. Rainier was refused with the list of
 real varieties. A question about the weather was refused as not being about
 harvested weight. And Regina in Block 3 was **answered**, with zero - which is
 the one that matters, because it is the case that separates a guard that checks
-names from a guard that refuses whatever it has not seen before. It is now a
-unit test and four checks in `npm run verify`.
+names from a guard that refuses whatever it has not seen before. It is now two
+unit tests and four checks in `npm run verify`.
 
 ## What I am not happy about
 

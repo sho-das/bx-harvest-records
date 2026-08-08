@@ -192,7 +192,7 @@ Every one of these messages also says "no answer was produced" in words. `answer
 
 ### D1. Raw SQL with the `pg` driver, not an ORM
 
-Reason: one table and one read query. An ORM is setup time with nothing saved.
+Reason: three tables, five read statements and one insert path. There is no object graph to map, and the queries that matter are a window function and a CTE that an ORM would make harder to read, not easier. An ORM is setup time with nothing saved.
 
 ### D2. Migrations as plain `.sql` files applied with `psql`
 
