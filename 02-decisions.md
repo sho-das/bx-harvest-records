@@ -83,24 +83,26 @@ Each option shows the value it produces and what the answer becomes.
 
 Line 11 - no unit written. Evidence: every other Block 3 row is kg.
 
+Every figure below is written to three decimal places, because that is what the table stores and what the endpoint returns (A6). If this document and the output ever disagree, one of them is wrong, and rounding here would hide which.
+
 | Option | Row becomes | Answer becomes |
 |---|---|---|
-| kg | 1,210 kg | 4,380 |
-| lb | 548.85 kg | 3,718.85 |
-| g | 1.21 kg | 3,171.21 |
+| kg | 1,210.000 kg | 4,380.000 |
+| lb | 548.847 kg | 3,718.847 |
+| g | 1.210 kg | 3,171.210 |
 
 Line 5 - date written `03/04/2026`.
 
 | Option | In range? | Answer becomes |
 |---|---|---|
-| 4 March 2026 | yes | 4,350 |
-| 3 April 2026 | no | 3,170 |
+| 4 March 2026 | yes | 4,350.000 |
+| 3 April 2026 | no | 3,170.000 |
 
 Line 6 - `record lost`, note "pickers left early". Free-text question, no options. Nobody can pick a weight from a list.
 
-The two parks are independent, so each carries its own kilogram delta. A single chained figure cannot express that. Confirming both gives 5,560.
+The two parks are independent, so each carries its own kilogram delta. A single chained figure cannot express that. Confirming both gives 5,560.000.
 
-**The endpoint answers 3,170 kg**, from lines 7, 17 and 26.
+**The endpoint answers 3,170.000 kg**, from lines 7, 17 and 26.
 
 ### B5. The two rows on 12 March - the re-weigh supersedes
 

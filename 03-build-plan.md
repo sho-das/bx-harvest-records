@@ -106,7 +106,7 @@ CREATE TABLE parked_option (
 
 An option stores what it does to **the row**, never what it does to **the answer**. The answer changes with the question asked. The row does not.
 
-So "answer becomes 4,380" is computed at query time, from one rule that covers both kinds of park:
+So "answer becomes 4,380.000" is computed at query time, from one rule that covers both kinds of park:
 
 ```sql
 CASE
@@ -119,7 +119,7 @@ END AS delta_kg
 
 Apply the option to the row. Re-run the filter. If the row now passes, the delta is its kilograms. If not, the delta is zero.
 
-Line 11 (no unit): the date is already 9 March, so it passes either way, and the delta is the option's kilograms - 1,210 or 548.85 or 1.21.
+Line 11 (no unit): the date is already 9 March, so it passes either way, and the delta is the option's kilograms - 1,210.000 or 548.847 or 1.210.
 
 Line 5 (`03/04/2026`): the kilograms are already 1,180, and the option changes the date. 4 March passes, so the delta is 1,180. 3 April fails, so the delta is 0.
 
@@ -153,7 +153,7 @@ POST, not GET with a query parameter. A question written in English needs URL en
 
 ```json
 {
-  "answer_kg": 3170,
+  "answer_kg": "3170.000",
 
   "understood_as": {
     "block": "B3",
@@ -164,12 +164,12 @@ POST, not GET with a query parameter. A question written in English needs URL en
 
   "counted": [
     { "line": 7,  "date": "2026-03-06", "quantity_raw": "990",
-      "unit_raw": "kg", "quantity_kg": 990,
+      "unit_raw": "kg", "quantity_kg": "990.000",
       "read_as": "variety written 'sweethart', read as Sweetheart" },
     { "line": 17, "date": "2026-03-12", "quantity_raw": "1105",
-      "unit_raw": "kg", "quantity_kg": 1105, "read_as": null },
+      "unit_raw": "kg", "quantity_kg": "1105.000", "read_as": null },
     { "line": 26, "date": "2026-03-20", "quantity_raw": "1075",
-      "unit_raw": "kg", "quantity_kg": 1075, "read_as": null }
+      "unit_raw": "kg", "quantity_kg": "1075.000", "read_as": null }
   ],
 
   "not_counted": [
@@ -183,17 +183,17 @@ POST, not GET with a query parameter. A question written in English needs URL en
       "question": "Line 11 has a quantity of 1210 but no unit. Which unit was it?",
       "evidence": "Every other Block 3 row in this file is written in kg.",
       "options": [
-        { "label": "kg", "row_becomes_kg": 1210,   "answer_becomes_kg": 4380 },
-        { "label": "lb", "row_becomes_kg": 548.85, "answer_becomes_kg": 3718.85 },
-        { "label": "g",  "row_becomes_kg": 1.21,   "answer_becomes_kg": 3171.21 }
+        { "label": "kg", "row_becomes_kg": "1210.000", "answer_becomes_kg": "4380.000" },
+        { "label": "lb", "row_becomes_kg": "548.847",  "answer_becomes_kg": "3718.847" },
+        { "label": "g",  "row_becomes_kg": "1.210",    "answer_becomes_kg": "3171.210" }
       ] },
 
     { "line": 5, "field": "harvest_date",
       "question": "Line 5 has the date 03/04/2026. Which date was it?",
       "evidence": "22 of the 24 dates in this file are written year-month-day. This one is not. Row order does not settle it either: line 18 (4 Mar 26) sits between 12 and 13 March, so this file does misplace rows.",
       "options": [
-        { "label": "4 March 2026", "in_range": true,  "answer_becomes_kg": 4350 },
-        { "label": "3 April 2026", "in_range": false, "answer_becomes_kg": 3170 }
+        { "label": "4 March 2026", "in_range": true,  "answer_becomes_kg": "4350.000" },
+        { "label": "3 April 2026", "in_range": false, "answer_becomes_kg": "3170.000" }
       ] },
 
     { "line": 6, "field": "quantity",
@@ -262,7 +262,7 @@ Three rows can each be wrongly added, and they are independent of each other: li
 | 4,380 | The blank unit on line 11 was filled instead of parked | yes |
 | 5,560 | Line 11 filled **and** the date read as 4 March | no, two |
 | 6,710 | Line 11 filled, date read as 4 March, **and** line 16 not superseded | no, three |
-| 8,617.44 | The block filter did not apply | yes |
+| 8,617.439 | The block filter did not apply | yes |
 
 The ladder in `01-data-analysis.md` is cumulative, so its rungs are not causes. This table is not the ladder. Each single-cause row is one rule failing on its own, which is how a rule usually fails. 5,560 and 6,710 are listed because they are the numbers the ladder produces, and seeing one means more than one rule broke at once.
 
