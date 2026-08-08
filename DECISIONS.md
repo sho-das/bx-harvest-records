@@ -179,6 +179,7 @@ unit tests and four checks in `npm run verify`.
 - **`selectNotCountedRows` and `selectParkedRows` overlap.** A parked row appears in both, once with its question as a reason and once with its priced options. It is honest but it is duplication in the response.
 - **The correction-linking rule reads a date out of free text.** "correction to 12/03" is parsed, both readings are tried, and block plus variety must leave exactly one row. It works here and it is guarded, but a note phrased differently would silently produce an unlinked correction rather than an error.
 - **I did not build the mock provider last,** as planned. Its precondition was that the filter shape had settled, and it had, so building it early cost nothing. But it means the plan and the build differ, and I would rather they did not.
+- **`moduleResolution` is still `node10`,** which is the old algorithm. It matches `module: commonjs`, `tsc` is clean and nothing here needs anything newer, so I left it. Moving to `node16` is the follow-up, and it is not a one-line change: `node16` starts honouring the `exports` maps in package.json, and a dependency that maps its subpaths differently from its file layout stops resolving. Worth doing deliberately, with the tests to catch it, rather than as a tidy-up. I did delete `baseUrl` in the same file, which was resolving nothing - there is no `paths` block and every internal import is relative, so it only bought a deprecation warning.
 
 ## What I would do next
 

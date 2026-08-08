@@ -198,6 +198,8 @@ Reason: three tables, five read statements and one insert path. There is no obje
 
 Reason: one migration. A migration tool is a dependency to explain.
 
+`npm run migrate` runs a twenty-line script rather than `psql` directly. Not to add a tool - it still shells out to `psql` and still applies plain `.sql`. It exists because an npm script reads the shell, not `.env`, so `psql "$DATABASE_URL"` was empty for anyone following the README. `psql` treats an empty connection string as "use every default", which includes a database named after the current user, so on the wrong machine it would have created these tables somewhere nobody asked for and said nothing. The script refuses without `DATABASE_URL` and prints the database before touching it.
+
 ### D3. Postgres on the host, not Docker
 
 Reason: smaller install, no daemon to fail on the day, and `psql` comes with it. Cost: the README says how to start Postgres instead of shipping one Docker command.

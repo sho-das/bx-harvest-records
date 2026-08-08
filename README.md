@@ -27,6 +27,10 @@ npm run import                # reads data/harvest-records-2026.csv
 npm start                     # compiles with tsc, then serves on :3000
 ```
 
+Every script reads `.env` itself. Nothing needs exporting into the shell first,
+and `npm run migrate` refuses to run without `DATABASE_URL` rather than letting
+`psql` fall back to a database named after you.
+
 Open <http://localhost:3000> for the page, or ask it from the terminal:
 
 ```bash
