@@ -203,6 +203,16 @@ No controller tests, no module wiring tests, no coverage target. The task says c
 
 Reason: "how did you check the output was right" is the question the task says it cares about. These tests are the answer.
 
+### D6. Hand-written scaffolding, not `nest new`
+
+`nest new` was not run. Four files were written by hand: `package.json`, `tsconfig.json`, `src/main.ts` and `src/app.module.ts`. The `@nestjs/cli` package is not installed.
+
+Reason: `nest new` ships eslint, prettier, a jest and ts-jest setup, an e2e test folder, `nest-cli.json` and a sample controller with its spec. None of that is used here. The task says test coverage and polish are not assessed, so the generated test harness would be configuration nobody reads. What is used is four files totalling about 60 lines.
+
+Cost, and it is real: `nest build`, `nest start --watch` and `nest generate` do not exist in this project. `tsconfig.json` has to carry `experimentalDecorators` and `emitDecoratorMetadata` correctly by hand, and NestJS does not start without them. Getting that wrong produces an error message that does not name the missing flag. `nest new` gets that right for you, and this is the one thing it would have been worth having.
+
+Second cost: `vitest` runs the tests instead of `jest`. A NestJS reviewer expects jest. The parsers are plain functions with no dependency injection, so nothing in the test file would change under jest, but it is a difference from what the stack implies.
+
 ## E. What gets cut, in order
 
 If the clock is against me at 1:55, stop building and start writing. An unfinished feature with an honest note beats a finished feature with no document.
