@@ -20,7 +20,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Injectable } from '@nestjs/common';
 import { BLOCKS, VARIETIES } from '../import/rules';
-import { RawIntentSchema, type RawIntent } from './intent.schema';
+import { RawIntentSchema, REASON_CODES, type RawIntent } from './intent.schema';
 
 /**
  * If this string comes back in the model's output, the output is discarded.
@@ -56,10 +56,14 @@ Rules:
   farms, harvests, or units from outside this conversation.
 - Never estimate and never round.
 - If a block or variety in the question is not on the lists above, set
-  understood to false and say so in cannot_answer_because. Do not pick the
-  closest one.
+  understood to false with reason_code unknown_block or unknown_variety. Do
+  not pick the closest one.
 - If the question is not about a quantity of harvested fruit, set understood
-  to false and say why.
+  to false with reason_code not_about_harvest.
+- When understood is false, reason_code is what the customer is shown. The
+  sentence is written by this system, not by you. cannot_answer_because is a
+  short note for the operator's log and is never shown to anyone. Never put a
+  number, a weight or a total in it.
 - date_to_exclusive is EXCLUSIVE. March 2026 is date_from 2026-03-01 and
   date_to_exclusive 2026-04-01. The whole of 2026 is 2026-01-01 and
   2027-01-01.
@@ -81,9 +85,16 @@ const FILTER_TOOL: Anthropic.Tool = {
         type: 'boolean',
         description: 'False if the question cannot be turned into a filter over this data.',
       },
+      reason_code: {
+        type: ['string', 'null'],
+        enum: [...REASON_CODES, null],
+        description:
+          'Set only when understood is false, null otherwise. This is what the customer is shown. The sentence for each code is fixed by the system.',
+      },
       cannot_answer_because: {
         type: ['string', 'null'],
-        description: 'Set only when understood is false. One sentence, addressed to the customer.',
+        description:
+          'Set only when understood is false. A short note for the operator log. Never shown to the customer. Never put a number or a weight in it.',
       },
       block: {
         type: ['string', 'null'],
@@ -119,17 +130,59 @@ export class LlmFailed extends Error {
 }
 
 /**
+ * How long to wait for the model, and how many times to ask.
+ *
+ * The SDK default is a ten minute timeout and two retries. That is a sensible
+ * default for a batch job and the wrong one for a request a person is waiting
+ * on: a customer holding a page open would sit there for half an hour before
+ * anything told them the call had failed.
+ *
+ * Fifteen seconds is generous for this call. It sends one question and asks for
+ * at most 1024 tokens of tool arguments, and a normal reply lands in two to
+ * four seconds.
+ *
+ * One retry, not two, because the retry has to be paid for in the customer's
+ * waiting time. Worst case is now about 31 seconds and, more to the point, it
+ * is bounded. Retrying is safe here: reading a question is a pure read, so
+ * asking twice cannot write anything twice.
+ */
+const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_RETRIES = 1;
+
+export function readTimeoutMs(raw: string | undefined): number {
+  const parsed = Number(raw);
+  // A missing, empty, unparseable, zero or negative value falls back rather
+  // than being passed through. `Number(undefined)` is NaN and `Number('')` is
+  // 0, and a timeout of 0 in the SDK means no timeout at all - which is the
+  // exact failure this exists to prevent, arrived at by typo.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
+/**
  * Turns a provider error into one sentence a customer can act on.
  *
  * Says what failed and what to do, and nothing about the request body. An
  * error message is a place credentials and prompt text leak by accident, so
  * only the status, the provider's own message and the model name cross over.
  */
-export function describeProviderError(error: unknown, model: string): string {
+export function describeProviderError(error: unknown, model: string, timeoutMs?: number): string {
   const status = (error as { status?: number })?.status;
   const detail =
     (error as { error?: { error?: { message?: string } } })?.error?.error?.message ??
     (error instanceof Error ? error.message : String(error));
+
+  /**
+   * A timeout is the one failure that cannot say "the question was not read".
+   *
+   * Every other branch below knows the request never got through. A timeout
+   * does not: the model may well have read the question and answered it, and
+   * the reply was lost on the way back. What is certain is that this system
+   * produced no number, so that is what the sentence claims and nothing more.
+   */
+  if (error instanceof Anthropic.APIConnectionTimeoutError) {
+    const seconds = Math.round((timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000);
+    return `The language model did not reply within ${seconds} seconds, so the question was left unanswered. Try again. No answer was produced.`;
+  }
 
   if (status === 401 || status === 403) {
     return `The language model rejected the API key, so the question was not read. Check ANTHROPIC_API_KEY, or set AI_PROVIDER=mock. No answer was produced.`;
@@ -157,9 +210,11 @@ export interface IntentReader {
 class AnthropicReader implements IntentReader {
   private readonly client: Anthropic;
   private readonly model: string;
+  private readonly timeoutMs: number;
 
-  constructor(apiKey: string, model: string) {
-    this.client = new Anthropic({ apiKey });
+  constructor(apiKey: string, model: string, timeoutMs: number) {
+    this.timeoutMs = timeoutMs;
+    this.client = new Anthropic({ apiKey, timeout: timeoutMs, maxRetries: MAX_RETRIES });
     this.model = model;
   }
 
@@ -184,7 +239,7 @@ class AnthropicReader implements IntentReader {
       // The provider failing is a failure to read the question, not a crash.
       // It has to leave by the same door as every other failure, or it
       // surfaces as a bare 500 with no reason and no answer_kg: null.
-      throw new LlmFailed(describeProviderError(error, this.model));
+      throw new LlmFailed(describeProviderError(error, this.model, this.timeoutMs));
     }
 
     // Guard 2. Read the whole reply as text before trusting any of it.
@@ -234,6 +289,7 @@ class MockReader implements IntentReader {
     return {
       intent: RawIntentSchema.parse({
         understood: true,
+        reason_code: null,
         cannot_answer_because: null,
         block: 'B3',
         variety: 'Sweetheart',
@@ -267,7 +323,11 @@ export class LlmService implements IntentReader {
         'ANTHROPIC_API_KEY is not set. Set it, or set AI_PROVIDER=mock to run without a key.',
       );
     }
-    this.reader = new AnthropicReader(apiKey, process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5');
+    this.reader = new AnthropicReader(
+      apiKey,
+      process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5',
+      readTimeoutMs(process.env.ANTHROPIC_TIMEOUT_MS),
+    );
   }
 
   read(question: string) {

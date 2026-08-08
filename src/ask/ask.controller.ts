@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
+  Logger,
   Post,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -25,6 +26,8 @@ const AskBody = z.object({
  */
 @Controller('ask')
 export class AskController {
+  private readonly log = new Logger(AskController.name);
+
   constructor(private readonly ask: AskService) {}
 
   @Post()
@@ -47,11 +50,21 @@ export class AskController {
       // Every failure below returns answer_kg: null and nothing that could be
       // read as a weight. A refusal that carries a number is a wrong number.
       if (error instanceof IntentRejected) {
+        // The model's own wording stops here. It is useful when a refusal
+        // looks wrong and has to be explained, and it is exactly the string a
+        // crafted question can choose, so the log is as far as it goes.
+        if (error.modelText !== null) {
+          this.log.warn(`refused: ${error.reason} | model said: ${error.modelText}`);
+        }
+
         throw new HttpException(
           {
             answered: false,
             answer_kg: null,
             reason: error.reason,
+            // The customer's own words, echoed so the page can show what was
+            // read back to them. Safe only because the person who wrote this
+            // is the person who reads it. See DECISIONS.md.
             question: parsed.data.question,
           },
           HttpStatus.UNPROCESSABLE_ENTITY,

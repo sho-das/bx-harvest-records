@@ -133,6 +133,27 @@
   }
   .refusal p { margin: 0; }
 
+  /*
+    Deliberately not the refusal styling. The red box is the system speaking.
+    This is the customer's own sentence read back, so it is quiet, and it sits
+    outside the box rather than in it.
+  */
+  .asked {
+    border-left: 3px solid var(--line);
+    padding: 2px 0 2px 12px;
+    margin-bottom: 14px;
+  }
+  .asked .tag {
+    display: block;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .asked p { margin: 0; color: var(--muted); }
+
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th {
     text-align: left;
@@ -217,6 +238,12 @@
 
     <section id="result" class="hidden">
       <h2>The answer</h2>
+      <!--
+        Shown above the refusal, outside the answer box. It carries the
+        customer's own words back, which is what makes a refusal readable
+        without quoting anything the model wrote.
+      -->
+      <div id="askedBox"></div>
       <div id="answerBox"></div>
     </section>
 
@@ -270,6 +297,7 @@
     copied: document.getElementById('copied'),
     result: document.getElementById('result'),
     answerBox: document.getElementById('answerBox'),
+    askedBox: document.getElementById('askedBox'),
     countedSection: document.getElementById('countedSection'),
     counted: document.getElementById('counted'),
     notCountedSection: document.getElementById('notCountedSection'),
@@ -379,15 +407,24 @@
     els.notCountedSection.classList.add('hidden');
     els.parkedSection.classList.add('hidden');
     els.answerBox.innerHTML = '';
+    els.askedBox.innerHTML = '';
     els.counted.innerHTML = '';
     els.notCounted.innerHTML = '';
     els.parked.innerHTML = '';
     els.totalBody.innerHTML = '<p class="hint">Run the question to see the figure.</p>';
   }
 
-  function showRefusal(reason) {
+  function showRefusal(reason, question) {
     clearResult();
     els.result.classList.remove('hidden');
+
+    // The refusal names the blocks that exist but never the block that was
+    // asked for, because that string comes from the model. The customer's own
+    // sentence supplies the missing half, and it is safe because they wrote it.
+    els.askedBox.innerHTML = question
+      ? '<div class="asked"><span class="tag">You asked</span><p>' + esc(question) + '</p></div>'
+      : '';
+
     els.answerBox.innerHTML =
       '<div class="refusal"><span class="tag">No answer</span><p>' + esc(reason) + '</p></div>';
     els.totalBody.innerHTML = '<p class="hint">No answer, so no total.</p>';
@@ -528,7 +565,10 @@
     clearResult();
 
     if (data.answered === false) {
-      showRefusal(data.reason || 'The question was not answered, and no reason was given.');
+      showRefusal(
+        data.reason || 'The question was not answered, and no reason was given.',
+        data.question
+      );
       return;
     }
 
@@ -595,9 +635,16 @@
         return;
       }
       var reason = (result.data && (result.data.reason || result.data.message)) || null;
-      showRefusal(reason || ('The server did not respond with an answer (HTTP ' + result.status + ').'));
+      // `question` here is the local variable, not a field off the response.
+      // On these two paths there may be no response body to read it from, and
+      // the local one is the same string for the same reason: the customer
+      // typed it into the box above.
+      showRefusal(
+        reason || ('The server did not respond with an answer (HTTP ' + result.status + ').'),
+        question
+      );
     }).catch(function () {
-      showRefusal('The server did not respond.');
+      showRefusal('The server did not respond.', question);
     }).then(function () {
       els.run.disabled = false;
       els.run.textContent = 'Run';

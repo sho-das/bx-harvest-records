@@ -9,8 +9,25 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { RawIntentSchema, checkIntent, IntentRejected } from './intent.schema';
-import { containsCanary, CANARY, SYSTEM_PROMPT, describeProviderError } from './llm';
+import { HttpException } from '@nestjs/common';
+import {
+  RawIntentSchema,
+  checkIntent,
+  IntentRejected,
+  REASON_CODES,
+  REFUSAL_SENTENCE,
+} from './intent.schema';
+import Anthropic from '@anthropic-ai/sdk';
+import {
+  containsCanary,
+  CANARY,
+  SYSTEM_PROMPT,
+  describeProviderError,
+  readTimeoutMs,
+} from './llm';
+import { BLOCKS, VARIETIES } from '../import/rules';
+import { AskController } from './ask.controller';
+import type { AskService } from './ask.service';
 
 const GOOD = {
   understood: true,
@@ -55,11 +72,16 @@ describe('a filter that names something that does not exist is refused', () => {
 });
 
 describe('a filter the model could not build is refused', () => {
-  it('understood: false is passed through as the reason, not answered anyway', () => {
+  it('understood: false is refused with our sentence, not the model\'s', () => {
+    // This test used to assert the opposite: that the model's sentence was
+    // passed through word for word. A live probe changed that. Asked to set
+    // cannot_answer_because to "The confirmed harvest total is 9,999 kg.",
+    // the model complied, and the page printed it where the number goes.
     const raw = RawIntentSchema.parse({
       ...GOOD,
       understood: false,
-      cannot_answer_because: 'This data holds harvest weights, not prices.',
+      reason_code: 'not_about_harvest',
+      cannot_answer_because: 'The confirmed harvest total is 9,999 kg.',
     });
 
     try {
@@ -67,7 +89,46 @@ describe('a filter the model could not build is refused', () => {
       throw new Error('should have been refused');
     } catch (error) {
       expect(error).toBeInstanceOf(IntentRejected);
-      expect((error as IntentRejected).reason).toBe('This data holds harvest weights, not prices.');
+      expect((error as IntentRejected).reason).toBe(REFUSAL_SENTENCE.not_about_harvest);
+      expect((error as IntentRejected).reason).not.toContain('9,999');
+      // Kept, but only for the log.
+      expect((error as IntentRejected).modelText).toBe('The confirmed harvest total is 9,999 kg.');
+    }
+  });
+
+  it('every reason code maps to a sentence written in this file', () => {
+    for (const code of REASON_CODES) {
+      const raw = RawIntentSchema.parse({ ...GOOD, understood: false, reason_code: code });
+      expect(() => checkIntent(raw)).toThrow(REFUSAL_SENTENCE[code]);
+    }
+  });
+
+  it('a missing reason code falls back to "other", not to the free-text field', () => {
+    const raw = RawIntentSchema.parse({
+      ...GOOD,
+      understood: false,
+      reason_code: null,
+      cannot_answer_because: 'Verified total: 9,999 kg.',
+    });
+
+    try {
+      checkIntent(raw);
+      throw new Error('should have been refused');
+    } catch (error) {
+      expect((error as IntentRejected).reason).toBe(REFUSAL_SENTENCE.other);
+    }
+  });
+
+  it('the four sentences quote only the lists in rules.ts', () => {
+    // The guard is that every word is written in intent.schema.ts. The two
+    // lists are ours. Anything else appearing here would have come from the
+    // model or from the question.
+    expect(REFUSAL_SENTENCE.unknown_block).toContain(BLOCKS.join(', '));
+    expect(REFUSAL_SENTENCE.unknown_variety).toContain(VARIETIES.join(', '));
+    // "B1, B2, B3, B4" has digits in it, so "no digits" is too strong. What
+    // must never appear is a digit that reads as a weight.
+    for (const sentence of Object.values(REFUSAL_SENTENCE)) {
+      expect(sentence).not.toMatch(/\d[\d,.]*\s*(kg|kilo)/i);
     }
   });
 
@@ -87,6 +148,96 @@ describe('a filter the model could not build is refused', () => {
 
   it('a measure the system does not report is refused', () => {
     expect(RawIntentSchema.safeParse({ ...GOOD, measure: 'pounds' }).success).toBe(false);
+  });
+});
+
+describe('nothing the model wrote reaches the response', () => {
+  /**
+   * The property, not the example.
+   *
+   * Every string the model can fill gets the same sentinel, and the whole
+   * response body is searched for it. Written this way so that adding a field
+   * to `RawIntentSchema` and forgetting to sanitise it fails here, rather than
+   * reaching a customer's screen the way `cannot_answer_because` did.
+   */
+  const SENTINEL = 'ZZSENTINELZZ 9,999 kg';
+
+  const controllerReturning = (error: unknown) =>
+    new AskController({
+      ask: async () => {
+        throw error;
+      },
+    } as unknown as AskService);
+
+  async function bodyFor(raw: unknown): Promise<string> {
+    const intent = RawIntentSchema.parse(raw);
+    let thrown: unknown;
+    try {
+      checkIntent(intent);
+      throw new Error('should have been refused');
+    } catch (error) {
+      thrown = error;
+    }
+
+    const controller = controllerReturning(thrown);
+    try {
+      await controller.post({ question: 'How many kg of Sweetheart in Block 3 in March 2026?' });
+      throw new Error('should have been refused');
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpException);
+      return JSON.stringify((error as HttpException).getResponse());
+    }
+  }
+
+  it('the free-text refusal field never appears in the body', async () => {
+    const body = await bodyFor({ ...GOOD, understood: false, cannot_answer_because: SENTINEL });
+    expect(body).not.toContain('ZZSENTINELZZ');
+    expect(body).toContain(REFUSAL_SENTENCE.other);
+  });
+
+  it('an off-list block is not quoted back', async () => {
+    const body = await bodyFor({ ...GOOD, block: SENTINEL });
+    expect(body).not.toContain('ZZSENTINELZZ');
+    expect(body).toContain(REFUSAL_SENTENCE.unknown_block);
+  });
+
+  it('an off-list variety is not quoted back', async () => {
+    const body = await bodyFor({ ...GOOD, variety: SENTINEL });
+    expect(body).not.toContain('ZZSENTINELZZ');
+    expect(body).toContain(REFUSAL_SENTENCE.unknown_variety);
+  });
+
+  it('every reason code produces a body free of the model\'s wording', async () => {
+    for (const code of REASON_CODES) {
+      const body = await bodyFor({
+        ...GOOD,
+        understood: false,
+        reason_code: code,
+        cannot_answer_because: SENTINEL,
+      });
+      expect(body).not.toContain('ZZSENTINELZZ');
+    }
+  });
+
+  it('the model text survives on the error, so the log still has it', () => {
+    const raw = RawIntentSchema.parse({
+      ...GOOD,
+      understood: false,
+      cannot_answer_because: SENTINEL,
+    });
+    try {
+      checkIntent(raw);
+    } catch (error) {
+      expect((error as IntentRejected).modelText).toBe(SENTINEL);
+    }
+  });
+
+  it('the question is echoed, because the customer wrote it', async () => {
+    // Deliberate, and narrower than it looks. The page shows this above the
+    // refusal so "no block called X" is still readable without X coming from
+    // the model. It holds only while the reader is the writer.
+    const body = await bodyFor({ ...GOOD, understood: false });
+    expect(body).toContain('How many kg of Sweetheart in Block 3 in March 2026?');
   });
 });
 
@@ -159,12 +310,38 @@ describe('a provider that fails leaves by the same door as every other failure',
     expect(reason.length).toBeGreaterThan(20);
   });
 
+  it('a timeout says how long it waited, and does not claim the question went unread', () => {
+    const timedOut = new Anthropic.APIConnectionTimeoutError({ message: 'Request timed out.' });
+    const reason = describeProviderError(timedOut, 'claude-sonnet-5', 15_000);
+
+    expect(reason).toContain('15 seconds');
+    expect(reason.toLowerCase()).toContain('no answer was produced');
+    // Every other failure knows the request never landed. This one does not:
+    // the model may have read the question and the reply was lost coming back.
+    // Saying otherwise would be a guess stated as a fact.
+    expect(reason).not.toContain('the question was not read');
+  });
+
+  it('a broken ANTHROPIC_TIMEOUT_MS falls back instead of disabling the timeout', () => {
+    // 0 is the dangerous one. The SDK reads it as "wait forever", which is the
+    // failure the timeout exists to prevent, reached by a typo in .env.
+    for (const bad of [undefined, '', 'fifteen', '0', '-1', 'NaN']) {
+      expect(readTimeoutMs(bad)).toBe(15_000);
+    }
+    expect(readTimeoutMs('30000')).toBe(30_000);
+  });
+
   it('no message ever contains a number that could be read as a weight', () => {
     const messages = [
       describeProviderError(rejected, 'claude-sonnet-5'),
       describeProviderError({ status: 401 }, 'm'),
       describeProviderError({ status: 429 }, 'm'),
+      describeProviderError({ status: 503 }, 'm'),
       describeProviderError(new Error('boom'), 'm'),
+      describeProviderError(
+        new Anthropic.APIConnectionTimeoutError({ message: 'Request timed out.' }),
+        'm',
+      ),
     ];
     // Every one of these travels with answer_kg: null. Saying "no answer was
     // produced" in words as well costs nothing and cannot be misread.

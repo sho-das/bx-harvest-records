@@ -188,6 +188,42 @@ The message says what failed and what to do, and nothing about the request. An e
 
 Every one of these messages also says "no answer was produced" in words. `answer_kg: null` already carries it, but words cannot be misread by a client that was looking for a number.
 
+### C7. The model picks a refusal code, it does not write the refusal
+
+`reason_code` is an enum with four values: `unknown_block`, `unknown_variety`, `not_about_harvest`, `other`. Each maps to a sentence written in `intent.schema.ts`. The model's own wording is kept on the `IntentRejected` object, written to the server log, and never returned.
+
+Reason: the refusal text was the one field the model could fill freely, and it is printed on the page where the number goes. Asked to set it to "The confirmed harvest total is 9,999 kg.", the model did, and the page showed exactly that. `answer_kg` was `null` the whole time, so every structured guard held and a fabricated number still reached the screen.
+
+It does not need an attacker. "How many kilograms of Sweetheart were harvested in Block 9,999 in March 2026?" came back as "Block 9,999 is not a valid block" - the model echoing the customer's own words, and the echo reading as a weight.
+
+An enum is the same guard already used for block and variety, applied to the last field that did not have it. The four sentences quote nothing but `BLOCKS` and `VARIETIES` from `rules.ts`.
+
+The cost: the refusal can no longer name the thing it is refusing. "There is no block called X" is more useful than "the question names a block that is not in this data". The page gets that back a different way - it prints the customer's own question above the refusal, under "You asked". The customer's words plus our block list say the same thing, and nothing the model wrote is on screen.
+
+That echo is safe only while the person asking is the person reading. If a question ever arrives from somewhere else - a saved report, a webhook, another service - the "You asked" line has to go with it.
+
+One interpolation is left. A backwards date range names both dates, and both passed `^\d{4}-\d{2}-\d{2}$` to get there, so each is ten characters of digits and hyphens. No string matching that pattern reads as a weight.
+
+### C8. The model call times out after 15 seconds and retries once
+
+`ANTHROPIC_TIMEOUT_MS` overrides the 15 seconds. Anything missing or unparseable falls back, including `0`.
+
+Reason: the SDK defaults to a ten minute timeout and two retries. That is right for a batch job and wrong for a request a person is waiting on - a customer would wait half an hour before being told the call failed. Fifteen seconds is generous for one question and at most 1024 tokens of tool arguments; a normal reply lands in two to four seconds.
+
+One retry, not two, because the retry is paid for out of the customer's waiting time. Worst case is about 31 seconds and it is bounded. Retrying is safe because reading a question is a pure read.
+
+`0` falls back rather than passing through, because the SDK reads `0` as "no timeout" - the exact failure this exists to prevent, arrived at by a typo in `.env`.
+
+The timeout message is the only one that does not say the question went unread. It may have been read and the reply lost on the way back. Only "no answer was produced" is certain, so only that is claimed.
+
+### D7. The pool closes on shutdown, after the server
+
+`SIGINT` and `SIGTERM` close the HTTP server first, then end the pool. A second signal is ignored.
+
+Reason: the order is the whole decision. `app.close()` stops new connections and waits for in-flight requests. Ending the pool first would pull the connection out from under a running query, and the customer waiting on that request would get a driver error instead of an answer. Without any of this, Postgres keeps an idle session per restart.
+
+Checked with a real `SIGTERM`: sessions on `bx_harvest` went from 6 to 1.
+
 ## D. Build choices
 
 ### D1. Raw SQL with the `pg` driver, not an ORM
