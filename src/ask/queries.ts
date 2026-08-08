@@ -64,9 +64,21 @@ function params(filter: Filter) {
 // 1. The number
 // ---------------------------------------------------------------------------
 
+/**
+ * The cast on the COALESCE is not decoration.
+ *
+ * `SUM` over an empty set is NULL, and the literal 0 that replaces it is an
+ * integer, so the answer came back as "0" where a matching query returns
+ * "3170.000". Two shapes for the same field. A client that formats or compares
+ * on the string, or asserts a fixed number of decimals, breaks on the one case
+ * nobody thinks to test: a question that is entirely valid and has no rows.
+ *
+ * Regina in Block 3 is that case. Both names are real, so nothing refuses it,
+ * and the honest answer is zero.
+ */
 export async function selectAnswerKg(pool: Pool, filter: Filter): Promise<string> {
   const result = await pool.query(
-    `SELECT COALESCE(SUM(quantity_kg), 0)::text AS answer_kg
+    `SELECT COALESCE(SUM(quantity_kg), 0)::numeric(12,3)::text AS answer_kg
        FROM harvest_record
       WHERE status = 'counted' AND ${MATCHES}`,
     params(filter),
@@ -177,7 +189,10 @@ export async function selectNotCountedRows(pool: Pool, filter: Filter): Promise<
 export async function selectParkedRows(pool: Pool, filter: Filter): Promise<ParkedRow[]> {
   const result = await pool.query(
     `WITH answer AS (
-       SELECT COALESCE(SUM(quantity_kg), 0) AS total
+       -- Same cast, same reason. Without it a parked option on a
+       -- zero-row question prices as "0" while its neighbours price
+       -- as "1210.000".
+       SELECT COALESCE(SUM(quantity_kg), 0)::numeric(12,3) AS total
          FROM harvest_record
         WHERE status = 'counted'
           AND ($1::text IS NULL OR block   = $1)

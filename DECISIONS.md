@@ -11,7 +11,7 @@ Longer versions of everything here: [`01-data-analysis.md`](01-data-analysis.md)
 - One table holding all 26 lines of the file, including the blank line 13 and the `TOTAL` line 27. A four-value `status` column decides what is countable.
 - `POST /ask`. The model turns English into a filter. Postgres produces every number.
 - Parked rows: the file does not settle three of the seven Block 3 Sweetheart rows, so each comes back as a question with options, and each option is priced.
-- 26 unit tests, a check constraint in Postgres, and `npm run verify` (17 checks).
+- 28 unit tests, a check constraint in Postgres, and `npm run verify` (21 checks against the loaded data).
 
 ## What I deliberately did not build
 
@@ -92,9 +92,9 @@ leak by accident, and a test asserts a key never appears in one.
 
 Three layers, each catching what the others cannot.
 
-1. **26 unit tests**, each named after a real line in the CSV or a way the model layer can fail. Two assert a negative, because the negative is the decision: `record lost` must not equal 0, and a blank unit must not equal kg.
+1. **28 unit tests**, each named after a real line in the CSV or a way the model layer can fail. Two assert a negative, because the negative is the decision: `record lost` must not equal 0, and a blank unit must not equal kg.
 2. **A check constraint in Postgres.** A row cannot be `counted` unless block, variety, date and kilograms are all present. It lives in the database, so no code path avoids it. I probed it both ways.
-3. **`npm run verify`, 17 checks,** including a diagnostic table. Three rows can each be wrongly added and one wrongly dropped, and each mistake produces its own number: 2,180 means the `sweethart` lookup did not fire; 4,320 means line 16 was not superseded; 4,350 means the date was read as 4 March; 4,380 means line 11 was filled; 8,617.439 means the block filter did not apply. A failing run names the file to open.
+3. **`npm run verify`, 21 checks,** including a diagnostic table. Three rows can each be wrongly added and one wrongly dropped, and each mistake produces its own number: 2,180 means the `sweethart` lookup did not fire; 4,320 means line 16 was not superseded; 4,350 means the date was read as 4 March; 4,380 means line 11 was filled; 8,617.439 means the block filter did not apply. A failing run names the file to open.
 
 Every figure in `02-decisions.md` was recomputed directly from the CSV before
 any code existed, and the documents are written to three decimal places to match
@@ -114,16 +114,24 @@ What I checked rather than accepted:
 - Every number in `02-decisions.md` was then recomputed from the raw file by script - 33 assertions, all passing - before the file was written.
 - `npm run verify` exists because "the total looks right" is not a check. It asserts which lines produced the total and what each wrong total would mean.
 
-Three bugs that review would not have found. The first two came from running it,
-the third came from a customer seeing the output:
+Four bugs that review would not have found. Two came from running the code, two
+from running it against the live model:
 
 - The `pg` driver returns a `DATE` as a JavaScript `Date` at midnight local time. This machine runs Asia/Kolkata, so 2026-03-12 crossed as 2026-03-11T18:30:00Z. That is a silent off-by-one-day answer. Fixed at the driver: `DATE` now comes back as the string Postgres wrote.
 - Dependency injection returned `undefined` at runtime while the typecheck was clean. `tsx` compiles with esbuild, which cannot emit `emitDecoratorMetadata`, so NestJS saw no constructor types. `tsc` validates that flag; esbuild ignores it. Fixed by compiling with `tsc` and running the output.
 - The first live call failed: Claude Sonnet 5 rejects `temperature`, which I had set to 0 for determinism it was not providing. Worse than the 400 was how it arrived - a bare `{"statusCode":500}`, no reason and no `answer_kg` field at all. A client reading `answer_kg` off that gets `undefined`, and `undefined` becomes 0 in enough places to matter. Only a live run surfaces that; no unit test was going to.
+- Asking about Regina in Block 3 returned `answer_kg: "0"` where every other question returns `"3170.000"`. `SUM` over no rows is NULL and the literal 0 replacing it is an integer, so a valid question with no matching rows came back in a different shape from one with rows. Fixed by casting the fallback to `NUMERIC(12,3)` in both places it appears. Nothing in the test suite reached it, because the suite only ever asked questions that had an answer.
+
+The live run of the guards is what turned this from a claim into a check. Block 9
+was refused with the list of real blocks. Rainier was refused with the list of
+real varieties. A question about the weather was refused as not being about
+harvested weight. And Regina in Block 3 was **answered**, with zero - which is
+the one that matters, because it is the case that separates a guard that checks
+names from a guard that refuses whatever it has not seen before. It is now a
+unit test and four checks in `npm run verify`.
 
 ## What I am not happy about
 
-- **The live model call was only proved by its failure.** The first attempt returned a 400 on `temperature`, which is fixed, and the failure path is now verified end to end with a deliberately invalid key: HTTP 502, `answer_kg: null`, a reason, and no key in the log. What I have not yet watched is a real model returning a well-formed filter for this question and the endpoint answering 3,170.000 off it. Everything under that call is verified; the call itself is one run away.
 - **`quantity_kg` is `NUMERIC(12,3)`,** so 1210 lb stores as 548.847 rather than the exact 548.8467677. Grams is finer than anything this file records, but it is a rounding I chose rather than one the data forced.
 - **`selectNotCountedRows` and `selectParkedRows` overlap.** A parked row appears in both, once with its question as a reason and once with its priced options. It is honest but it is duplication in the response.
 - **The correction-linking rule reads a date out of free text.** "correction to 12/03" is parsed, both readings are tried, and block plus variety must leave exactly one row. It works here and it is guarded, but a note phrased differently would silently produce an unlinked correction rather than an error.

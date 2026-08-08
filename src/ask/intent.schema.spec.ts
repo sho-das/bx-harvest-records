@@ -90,6 +90,28 @@ describe('a filter the model could not build is refused', () => {
   });
 });
 
+describe('a real question with no rows is not a question to refuse', () => {
+  it('Regina in Block 3 passes the guard, because both names are real', () => {
+    // No Regina was harvested in Block 3. That is a fact about the data, not
+    // a fault in the question, and the guard must not confuse the two. It is
+    // what separates a working whitelist from one that refuses anything
+    // unfamiliar: refusing this would be as wrong as answering Block 9 with
+    // 0 kg. The answer is 0.000 and it comes from SQL, checked in verify.ts.
+    const filter = checkIntent(RawIntentSchema.parse({ ...GOOD, variety: 'Regina' }));
+    expect(filter).toEqual({
+      block: 'B3',
+      variety: 'Regina',
+      dateFrom: '2026-03-01',
+      dateToExclusive: '2026-04-01',
+    });
+  });
+
+  it('Regina in Block 9 is still refused, because B9 is not a block', () => {
+    expect(() => checkIntent(RawIntentSchema.parse({ ...GOOD, variety: 'Regina', block: 'B9' })))
+      .toThrow(IntentRejected);
+  });
+});
+
 describe('null means all, not none', () => {
   it('a question with no block filters on variety and date only', () => {
     const filter = checkIntent(RawIntentSchema.parse({ ...GOOD, block: null }));

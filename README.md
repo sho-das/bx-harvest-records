@@ -47,8 +47,8 @@ filter that was worked out.
 ## Checking it
 
 ```bash
-npm test        # 26 unit tests, no database and no network needed
-npm run verify  # 17 checks against the loaded data
+npm test        # 28 unit tests, no database and no network needed
+npm run verify  # 21 checks against the loaded data
 ```
 
 ## What the response contains

@@ -59,6 +59,29 @@ async function main() {
     [7],
   );
 
+  // A question where both names are real and no row matches. It is the case
+  // that separates a working guard from one that refuses whatever it does not
+  // recognise: refusing this would be as wrong as answering Block 9 with 0 kg.
+  console.log('\nA real question with no rows answers zero, in the same shape');
+  const emptyButValid: Filter = { ...QUESTION, variety: 'Regina' };
+  const zero = await selectAnswerKg(pool, emptyButValid);
+  check('Regina in Block 3, March 2026 returns 0.000, not 0', zero, '0.000');
+  check(
+    '  and 0.000 has the same shape as 3170.000',
+    [zero.split('.')[1]?.length, answer.split('.')[1]?.length],
+    [3, 3],
+  );
+  check(
+    '  with no counted rows',
+    (await selectCountedRows(pool, emptyButValid)).length,
+    0,
+  );
+  check(
+    '  and nothing parked, because all three parks are Sweetheart',
+    (await selectParkedRows(pool, emptyButValid)).length,
+    0,
+  );
+
   console.log('\nEvery line in the file is accounted for');
   const status = await pool.query(
     `SELECT status::text AS status, COUNT(*)::int AS n FROM harvest_record GROUP BY status ORDER BY status`,
