@@ -13,7 +13,7 @@ async function main() {
   const report = await importCsv(path);
 
   console.log('');
-  console.log(`  lines read      ${report.linesRead}`);
+  console.log(`  data lines read ${report.linesRead}`);
   console.log(`  counted         ${report.counted}`);
   console.log(`  parked          ${report.parked}`);
   console.log(`  superseded      ${report.superseded}`);

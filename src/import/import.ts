@@ -1,8 +1,9 @@
 /**
  * Reads harvest-records-2026.csv and writes every line to the table.
  *
- * A1: nothing is thrown out. 26 lines in the file become 26 rows, including
- * the empty line 13 and the TOTAL line 27.
+ * A1: nothing is thrown out. The file is 28 lines: a header, 26 data lines and
+ * a trailing newline. All 26 data lines become rows, including the empty
+ * line 13 and the TOTAL line 27.
  *
  * The importer never decides what a value means. `parse.ts` decides, and it
  * only ever reports what the file settles. Anything it does not settle is

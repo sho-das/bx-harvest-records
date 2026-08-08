@@ -118,7 +118,7 @@ cannot have status `counted` unless block, variety, date and kilograms are all
 present. That rule is in the database, not in TypeScript, so no code path goes
 around it. Line 11 has no `quantity_kg` at all until somebody names the unit.
 
-**Nothing is thrown away.** Every one of the 26 lines becomes a row, including
+**Nothing is thrown away.** Every one of the 26 data lines becomes a row, including
 the blank line 13 and the `TOTAL` line 27. A row that is not counted is
 returned with the reason it was not counted. A missing row nobody mentioned is
 a wrong number.
@@ -138,7 +138,7 @@ src/
   db/migrations/001_init.sql     one enum, three tables, two check constraints
   import/rules.ts                every lookup table in the project
   import/parse.ts                readers: settled, ambiguous, or unreadable
-  import/import.ts               26 lines in, 26 rows out
+  import/import.ts               26 data lines in, 26 rows out
   ask/intent.schema.ts           the filter shape and the guards
   ask/llm.ts                     the model, the prompt, the canary
   ask/queries.ts                 the statements that produce every number
