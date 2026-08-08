@@ -19,7 +19,12 @@ import { config } from 'dotenv';
 config();
 
 import { getPool, closePool } from '../src/db/pool';
-import { selectAnswerKg, selectCountedRows, selectParkedRows } from '../src/ask/queries';
+import {
+  selectAnswerKg,
+  selectCountedRows,
+  selectNotCountedRows,
+  selectParkedRows,
+} from '../src/ask/queries';
 import type { Filter } from '../src/ask/intent.schema';
 
 const QUESTION: Filter = {
@@ -81,6 +86,38 @@ async function main() {
     (await selectParkedRows(pool, emptyButValid)).length,
     0,
   );
+
+  // A park is a question worth asking only if answering it could move this
+  // answer. Line 11's date is settled at 9 March and no option changes a date,
+  // so on a 4 March question no reading of its unit brings it into range.
+  console.log('\nA park is only shown when answering it could change the answer');
+
+  const parkedLines = async (f: Filter) => (await selectParkedRows(pool, f)).map((p) => p.line);
+  const oneDay = (from: string, to: string): Filter => ({ ...QUESTION, dateFrom: from, dateToExclusive: to });
+
+  check('March 2026 asks about lines 5, 6 and 11', await parkedLines(QUESTION), [5, 6, 11]);
+  check('4 March asks about line 5 only, the one whose date is in question',
+    await parkedLines(oneDay('2026-03-04', '2026-03-05')), [5]);
+  check('9 March asks about line 11 only', await parkedLines(oneDay('2026-03-09', '2026-03-10')), [11]);
+  check('June 2026 asks nothing, because 4 March and 3 April are both outside it',
+    await parkedLines(oneDay('2026-06-01', '2026-07-01')), []);
+
+  // The two views of a left-out row must not contradict each other. Before the
+  // scope rule, line 11 was absent from the rows left out and present under
+  // waiting on an answer, in the same response.
+  for (const [label, f] of [
+    ['March 2026', QUESTION],
+    ['4 March', oneDay('2026-03-04', '2026-03-05')],
+    ['June 2026', oneDay('2026-06-01', '2026-07-01')],
+  ] as [string, Filter][]) {
+    const asked = await parkedLines(f);
+    const left = (await selectNotCountedRows(pool, f)).map((r) => r.line);
+    check(
+      `  every park on ${label} is also listed as a row left out`,
+      asked.filter((line) => !left.includes(line)),
+      [],
+    );
+  }
 
   console.log('\nEvery line in the file is accounted for');
   const status = await pool.query(

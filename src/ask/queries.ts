@@ -185,6 +185,20 @@ export async function selectNotCountedRows(pool: Pool, filter: Filter): Promise<
  * Line 11 has a settled date and no weight, so the option supplies the weight.
  * Line 5 has a settled weight and no date, so the option supplies the date.
  * Neither case is written into this query by hand.
+ *
+ * A park is only returned when answering it could change this answer. Ask about
+ * 4 March and line 11 drops out: its date is settled at 9 March, no option
+ * changes a date, so no reading of its unit brings it into range. Line 5 stays,
+ * because its date is the thing in question and one reading is 4 March.
+ *
+ * The test is `bool_or(in_range)` across the park's own options, which is the
+ * same "nothing settled about it rules it out" rule the not-counted query uses.
+ * Without it the two disagreed on screen: line 11 was absent from the rows left
+ * out and present under waiting on an answer, in the same response.
+ *
+ * A park with every option out of range drops too. Ask about June and line 5
+ * goes, because 4 March and 3 April are both outside it. Asking a customer a
+ * question whose every answer changes nothing is noise.
  */
 export async function selectParkedRows(pool: Pool, filter: Filter): Promise<ParkedRow[]> {
   const result = await pool.query(
@@ -206,20 +220,27 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
               o.id AS option_id, o.label, o.sort_order,
               COALESCE(o.quantity_kg,  r.quantity_kg)  AS row_kg,
               COALESCE(o.harvest_date, r.harvest_date) AS row_date,
-              COALESCE(o.quantity_kg,  r.quantity_kg) IS NOT NULL AS has_weight
+              COALESCE(o.quantity_kg,  r.quantity_kg) IS NOT NULL AS has_weight,
+              (COALESCE(o.harvest_date, r.harvest_date) IS NOT NULL
+                AND ($3::date IS NULL OR COALESCE(o.harvest_date, r.harvest_date) >= $3)
+                AND ($4::date IS NULL OR COALESCE(o.harvest_date, r.harvest_date) <  $4)) AS in_range
          FROM harvest_record r
          JOIN parked_question q ON q.record_id = r.id
          LEFT JOIN parked_option o ON o.question_id = q.id
         WHERE r.status = 'parked'
           AND ($1::text IS NULL OR r.block   = $1 OR r.block   IS NULL)
           AND ($2::text IS NULL OR r.variety = $2 OR r.variety IS NULL)
+     ),
+     worth_asking AS (
+       -- Keep the park only if at least one reading of it lands in range.
+       -- Partitioned by question, so an option that changes nothing still
+       -- shows, as long as a sibling option changes something.
+       SELECT a.*, bool_or(a.in_range) OVER (PARTITION BY a.question_id) AS can_matter
+         FROM applied a
      )
      SELECT a.source_line AS line, a.field, a.question, a.evidence, a.free_text,
-            a.option_id, a.label, a.sort_order,
+            a.option_id, a.label, a.sort_order, a.in_range,
             a.row_kg::text AS row_becomes_kg,
-            (a.row_date IS NOT NULL
-              AND ($3::date IS NULL OR a.row_date >= $3)
-              AND ($4::date IS NULL OR a.row_date <  $4)) AS in_range,
             CASE
               WHEN NOT a.has_weight THEN NULL
               WHEN a.row_date IS NULL THEN NULL
@@ -227,8 +248,9 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
               WHEN ($4::date IS NOT NULL AND a.row_date >= $4) THEN answer.total
               ELSE answer.total + a.row_kg
             END::text AS answer_becomes_kg
-       FROM applied a
+       FROM worth_asking a
        CROSS JOIN answer
+      WHERE a.can_matter
       ORDER BY a.source_line, a.sort_order NULLS FIRST`,
     params(filter),
   );

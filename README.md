@@ -54,7 +54,7 @@ filter that was worked out.
 
 ```bash
 npm test        # 28 unit tests, no database and no network needed
-npm run verify  # 21 checks against the loaded data
+npm run verify  # 28 checks against the loaded data
 ```
 
 ## What the response contains

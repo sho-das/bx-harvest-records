@@ -49,7 +49,7 @@
 
   .wrap {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-columns: minmax(0, 1fr) 400px;
     gap: 40px;
     max-width: 1180px;
     margin: 0 auto;
@@ -159,15 +159,15 @@
   .park {
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 16px 18px;
-    margin-bottom: 14px;
+    padding: 15px 16px;
+    margin-bottom: 12px;
   }
   .park .q { font-weight: 600; }
   .park .evidence { color: var(--muted); font-size: 14px; margin-top: 6px; }
-  .park .opts { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .park .opts { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 14px; }
   .opt { text-align: left; line-height: 1.35; padding: 9px 14px; }
   .opt .label { display: block; font-weight: 600; }
-  .opt .detail { display: block; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .opt .detail { display: block; font-size: 12px; color: var(--muted); font-family: var(--mono); margin-top: 2px; }
   .opt[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .opt[aria-pressed="true"] .detail { color: var(--accent-ink); opacity: 0.85; }
   .needs-person { margin-top: 12px; font-size: 14px; color: var(--muted); }
@@ -175,11 +175,13 @@
   .total {
     position: sticky;
     top: 32px;
+    z-index: 1;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 20px;
   }
+  aside section { margin-top: 26px; margin-bottom: 0; }
   .total h2 { margin-top: 0; }
   .tline { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; font-size: 14px; }
   .tline .v { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -229,11 +231,6 @@
       <h2>Rows not counted</h2>
       <div id="notCounted"></div>
     </section>
-
-    <section id="parkedSection" class="hidden">
-      <h2>Waiting on an answer</h2>
-      <div id="parked"></div>
-    </section>
   </main>
 
   <aside>
@@ -249,6 +246,14 @@
         is one endpoint and it only reads.
       </p>
     </div>
+
+    <!-- Directly under the total, because clicking an option and watching the
+         figure move are the same action. Putting them in separate columns made
+         you look in two places at once. -->
+    <section id="parkedSection" class="hidden">
+      <h2>Waiting on an answer</h2>
+      <div id="parked"></div>
+    </section>
   </aside>
 </div>
 

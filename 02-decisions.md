@@ -100,6 +100,10 @@ Line 5 - date written `03/04/2026`.
 
 Line 6 - `record lost`, note "pickers left early". Free-text question, no options. Nobody can pick a weight from a list.
 
+A park is only returned when answering it could move the answer being asked for. Ask about 4 March and line 11 drops out: its date is settled at 9 March, and no reading of its unit brings it into range. Ask about June and line 5 drops out too, because 4 March and 3 April are both outside it.
+
+Reason: a question whose every answer changes nothing is not a question. It is the same "nothing settled about it rules it out" rule the not-counted list already used, and the two disagreed until this was added - line 11 was absent from the rows left out and present under waiting on an answer, in the same response.
+
 The two parks are independent, so each carries its own kilogram delta. A single chained figure cannot express that. Confirming both gives 5,560.000.
 
 **The endpoint answers 3,170.000 kg**, from lines 7, 17 and 26.
