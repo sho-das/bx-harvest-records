@@ -1,0 +1,27 @@
+block,variety,harvest_date,quantity,unit,grader,notes
+B1,Sweetheart,2026-03-02,842,kg,J Silvestre,
+B1,Sweetheart,2026-03-03,910,kg,J Silvestre,
+B1,Lapins,2026-03-03,"1,240",kg,J Silvestre,
+B3,Sweetheart,03/04/2026,1180,kg,R Craig,
+B3,Sweetheart,2026-03-05,record lost,,R Craig,pickers left early
+B3,sweethart,2026-03-06,990,kg,R Craig,
+B2,Lapins,2026-03-06,2100,lb,M Reid,US buyer sheet
+B2,Lapins,2026-03-07,1980,lbs,M Reid,
+B2,Lapins,2026-03-09,2040,Lb,M Reid,
+B3,Sweetheart,2026-03-09,1210,,R Craig,
+B1,Sweetheart,2026-03-10,875,Kg,J Silvestre,
+,,,,,,
+B4,Regina,2026-03-11,660,kg,M Reid,
+B4,Regina,2026-03-12,712,kg,M Reid,
+B3,Sweetheart,2026-03-12,1150,kg,R Craig,
+B3,Sweetheart,2026-03-12,1105,kg,R Craig,re-weighed after grading
+B1,Lapins,4 Mar 26,1320,kg,J Silvestre,
+B2,Regina,2026-03-13,1870,lb,M Reid,
+B4,Regina,2026-03-14,-120,kg,M Reid,correction to 12/03 overcount
+B1,Sweetheart,2026-03-16,930,kg,J Silvestre,
+B3,Lapins,2026-03-17,1440,kg,R Craig,
+B2,Sweetheart,2026-03-17,2210,lb,M Reid,
+B4,Regina,2026-03-18,690,kg,M Reid,
+B1,Sweetheart,2026-03-19,888,kg,J Silvestre,
+B3,Sweetheart,2026-03-20,1075,kg,R Craig,
+TOTAL,,,28450,kg,,
