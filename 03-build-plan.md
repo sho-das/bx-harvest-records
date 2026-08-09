@@ -281,3 +281,33 @@ Cuts this plan adds:
 Not building at all: any endpoint other than the one asked for. Auth, deployment, CI - the task says they are not assessed.
 
 Everything above goes in `DECISIONS.md` under "what I deliberately did not build", with the reason beside it.
+
+
+## 7. What changed after this was written
+
+This plan is as it was written, before any code existed. It is not updated to
+match what got built. What differs:
+
+- **Five queries per request, not three.** Counted rows, rows left out and
+  parked rows each needed their own statement, plus a source summary so the
+  response can say 26 rows were read.
+- **39 tests, not eight.** The eight parser tests are all there. The rest cover
+  the model layer, which this plan did not think about.
+- **A page at `GET /`.** Not in this plan. C2 was cut, as the plan said it
+  would be, and the page went into that slot. A JSON response does not show
+  that picking two options gives 5,560.000 and not 4,380.000.
+- **`scripts/migrate.ts` and `scripts/verify.ts`.** The plan applied migrations
+  with a bare `psql` command. That reads `$DATABASE_URL` from the shell, and
+  `psql ""` does not fail - it falls back to a database named after the current
+  user, so the tables can land somewhere else without an error.
+- **The response carries `answered` and `read_by`,** and `date_to` is named
+  `date_to_exclusive`, so nobody has to guess whether the last day is included.
+- **The schema grew four things:** `imported_at`, `sort_order` on an option, a
+  check that a superseded row names its replacement, and one question per field
+  per record.
+- **A 15 second timeout, an ordered shutdown, and `reason_code`.** All three
+  came from running the thing rather than planning it, and they went into the
+  spare slot.
+
+The order of work held and all three checkpoints held. The mock provider was
+built early rather than last, which is in `DECISIONS.md`.
