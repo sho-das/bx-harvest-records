@@ -1,8 +1,9 @@
 # DECISIONS
 
-The answer is **3,170.000 kg**, from lines 7, 17 and 26. The endpoint returns
-that number, the rows it added up, the rows it left out, and what the answer
-becomes if the open questions get answered.
+The endpoint returns **3,170.000 kg**, from lines 7, 17 and 26. With it come
+the rows it left out and what the total becomes under each open reading:
+4,380.000 if line 11 is kilograms, 4,350.000 if line 5 is 4 March, 5,560.000
+if both.
 
 Working notes behind every line here: [`01-data-analysis.md`](01-data-analysis.md),
 [`02-decisions.md`](02-decisions.md), [`03-build-plan.md`](03-build-plan.md),
