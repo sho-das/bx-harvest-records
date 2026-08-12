@@ -24,11 +24,15 @@ import {
   selectCountedRows,
   selectNotCountedRows,
   selectParkedRows,
+  selectExtremeBlocks,
 } from '../src/ask/queries';
+import { BLOCKS } from '../src/import/rules';
 import type { Filter } from '../src/ask/intent.schema';
 
 const QUESTION: Filter = {
   block: 'B3',
+  blockComparison: false,
+  highest: true,
   variety: 'Sweetheart',
   dateFrom: '2026-03-01',
   dateToExclusive: '2026-04-01',
@@ -181,8 +185,12 @@ async function main() {
     '6710.000',
   );
 
+  // 8617.439 has two meanings now, and they must not be confused. Asked about
+  // one block it means the block filter did not apply. Asked as a comparison
+  // it is the correct total across all four. This check is the first meaning:
+  // one block asked for, block dropped.
   const noBlock = await selectAnswerKg(pool, { ...QUESTION, block: null });
-  check('8617.439 means the block filter did not apply', noBlock, '8617.439');
+  check('8617.439 means the block filter did not apply to a single-block question', noBlock, '8617.439');
 
   check(
     '  and the endpoint agrees 4380.000 is what confirming kg would give',
@@ -207,6 +215,65 @@ async function main() {
     free_text: lostPark?.free_text,
     options: lostPark?.options.length,
   }, { free_text: true, options: 0 });
+
+  // ---------------------------------------------------------------------------
+  // The comparison: same question, one block at a time
+  // ---------------------------------------------------------------------------
+
+  console.log('\nEvery block answers the same question');
+  const comparison: Filter = { ...QUESTION, block: null, blockComparison: true, highest: true };
+  const byBlock: [string, string][] = [];
+  for (const block of BLOCKS) {
+    byBlock.push([block, await selectAnswerKg(pool, { ...comparison, block })]);
+  }
+  check(
+    'B1 4445.000, B2 1002.439, B3 3170.000, B4 0.000',
+    byBlock,
+    [['B1', '4445.000'], ['B2', '1002.439'], ['B3', '3170.000'], ['B4', '0.000']],
+  );
+
+  // A bare GROUP BY returns three rows here, because B4 has no Sweetheart in
+  // March. A block missing from the comparison is a block the customer never
+  // learns was empty.
+  check('B4 is present and empty, not absent', byBlock.length, 4);
+
+  check('B3 still answers 3170.000 inside the comparison', byBlock[2][1], '3170.000');
+
+  check('B1 is the highest of the four', await selectExtremeBlocks(pool, comparison, true), [
+    'B1',
+  ]);
+
+  // The direction is a different question, not a different sort order, and
+  // answering "least" with B1 is a wrong answer rather than an untidy one.
+  // B4 wins it at 0.000 because B4 recorded no Sweetheart in March at all.
+  check('B4 is the lowest of the four, at 0.000', await selectExtremeBlocks(pool, comparison, false), [
+    'B4',
+  ]);
+  check('  and B4 really is 0.000, so the lowest is not a block that was skipped', byBlock[3][1], '0.000');
+
+  // The one check that catches a fifth block entering the data without
+  // entering BLOCKS: the parts would stop adding up to the whole.
+  check(
+    'the four blocks add up to the whole scope, 8617.439',
+    await sum(...byBlock.map(([, kg]) => kg)),
+    '8617.439',
+  );
+
+  console.log('\nA comparison where nothing matches has no winner, not a first place');
+  const june: Filter = { ...comparison, dateFrom: '2026-06-01', dateToExclusive: '2026-07-01' };
+  const juneByBlock: string[] = [];
+  for (const block of BLOCKS) {
+    juneByBlock.push(await selectAnswerKg(pool, { ...june, block }));
+  }
+  check('every block is 0.000', juneByBlock, ['0.000', '0.000', '0.000', '0.000']);
+  // All four tie. The service turns that into "no rows matched in any block"
+  // rather than naming B1, which would be a winner of nothing. Both directions
+  // have to agree here: with every figure equal there is no highest and no
+  // lowest, and a direction that returned one block would be inventing it.
+  check('and all four tie for highest, rather than an empty list',
+    await selectExtremeBlocks(pool, june, true), ['B1', 'B2', 'B3', 'B4']);
+  check('and all four tie for lowest too',
+    await selectExtremeBlocks(pool, june, false), ['B1', 'B2', 'B3', 'B4']);
 
   console.log('');
   if (failures > 0) {

@@ -13,6 +13,7 @@ import { HttpException } from '@nestjs/common';
 import {
   RawIntentSchema,
   checkIntent,
+  describeFilter,
   IntentRejected,
   REASON_CODES,
   REFUSAL_SENTENCE,
@@ -251,6 +252,8 @@ describe('a real question with no rows is not a question to refuse', () => {
     const filter = checkIntent(RawIntentSchema.parse({ ...GOOD, variety: 'Regina' }));
     expect(filter).toEqual({
       block: 'B3',
+      blockComparison: false,
+      highest: true,
       variety: 'Regina',
       dateFrom: '2026-03-01',
       dateToExclusive: '2026-04-01',
@@ -270,6 +273,75 @@ describe('null means all, not none', () => {
     expect(filter.variety).toBe('Sweetheart');
     // On this file that filter returns 8617.439, not 3170.000. Null is not a
     // quiet way of saying "no rows".
+  });
+});
+
+describe('block_comparison changes which blocks are asked, and nothing else', () => {
+  it('is false when the model leaves it out, so a missing field never widens the answer', () => {
+    const filter = checkIntent(RawIntentSchema.parse(GOOD));
+    expect(filter.blockComparison).toBe(false);
+    expect(filter.block).toBe('B3');
+  });
+
+  it('true drops the block, because a comparison spans every one of them', () => {
+    const filter = checkIntent(RawIntentSchema.parse({ ...GOOD, block_comparison: true }));
+    expect(filter.blockComparison).toBe(true);
+    expect(filter.block).toBeNull();
+  });
+
+  it('carries the end of the comparison the question asked for, both ways', () => {
+    // "Which block picked the least" is a different question from "which
+    // picked the most", and answering one with the other is a wrong answer,
+    // not a near miss.
+    for (const highest of [true, false]) {
+      const filter = checkIntent(
+        RawIntentSchema.parse({ ...GOOD, block_comparison: true, highest }),
+      );
+      expect(filter.highest).toBe(highest);
+    }
+  });
+
+  it('true does not stop a block that does not exist being refused', () => {
+    // The order inside checkIntent is the whole test. Nulling the block before
+    // readBlock runs would turn "which block picked the most, and how did
+    // Block 9 do?" into a silent success across the four real blocks.
+    expect(() =>
+      checkIntent(RawIntentSchema.parse({ ...GOOD, block: 'B9', block_comparison: true })),
+    ).toThrow(IntentRejected);
+  });
+
+  it('true leaves the variety and both dates exactly as they were', () => {
+    const filter = checkIntent(
+      RawIntentSchema.parse({ ...GOOD, block_comparison: true, highest: false }),
+    );
+    expect(filter.variety).toBe('Sweetheart');
+    expect(filter.dateFrom).toBe('2026-03-01');
+    expect(filter.dateToExclusive).toBe('2026-04-01');
+
+    // And the variety whitelist still refuses. One field widens one filter.
+    expect(() =>
+      checkIntent(
+        RawIntentSchema.parse({ ...GOOD, variety: 'Rainier', block_comparison: true }),
+      ),
+    ).toThrow(IntentRejected);
+  });
+
+  it('the reading shown to the customer says which way the comparison ran', () => {
+    // Without this field the reading says block: null, which reads as "the
+    // block filter was dropped" rather than "every block was compared". And
+    // without the direction it does not say which block should be on top.
+    const filter = checkIntent(
+      RawIntentSchema.parse({ ...GOOD, block_comparison: true, highest: false }),
+    );
+    expect(describeFilter(filter)).toEqual({
+      block: null,
+      block_comparison: true,
+      highest: false,
+      variety: 'Sweetheart',
+      date_from: '2026-03-01',
+      date_to_exclusive: '2026-04-01',
+      measure: 'kilograms',
+    });
   });
 });
 

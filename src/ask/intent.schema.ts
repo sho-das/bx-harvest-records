@@ -69,6 +69,30 @@ export const RawIntentSchema = z.object({
   cannot_answer_because: z.string().nullable().default(null),
 
   block: z.string().nullable().default(null),
+
+  /**
+   * "Which block picked the most?" rather than "how much did this block pick?"
+   *
+   * It is the one field that changes which queries run. Absent means false:
+   * a model that does not fill it gets the single answer, never the wider one.
+   */
+  block_comparison: z.boolean().default(false),
+
+  /**
+   * Which end of the comparison. True for the most, false for the least.
+   *
+   * Read only when `block_comparison` is true. Answering "which block picked
+   * the least" with the block that picked the most is a wrong answer, not an
+   * untidy one, so it is a field the model has to set rather than a direction
+   * this code assumes.
+   *
+   * It defaults to true because the schema has to keep parsing a refusal that
+   * fills nothing else. The tool schema lists it as required, so in practice
+   * the model always sends it, and the direction is printed back in
+   * `understood_as` where a wrong one is visible.
+   */
+  highest: z.boolean().default(true),
+
   variety: z.string().nullable().default(null),
   date_from: DATE.nullable().default(null),
 
@@ -87,6 +111,9 @@ export type RawIntent = z.infer<typeof RawIntentSchema>;
 /** The checked shape. Only this reaches SQL. */
 export type Filter = {
   block: Block | null;
+  blockComparison: boolean;
+  /** Read only when `blockComparison` is true. True for most, false for least. */
+  highest: boolean;
   variety: Variety | null;
   dateFrom: string | null;
   dateToExclusive: string | null;
@@ -162,7 +189,23 @@ export function checkIntent(raw: RawIntent): Filter {
   }
 
   return {
-    block,
+    /**
+     * Checked, then dropped. A comparison spans every block, so the filter
+     * carries none.
+     *
+     * The checking above still has to happen first. "Which block picked the
+     * most Sweetheart, and how did Block 9 do?" names a block that does not
+     * exist, and that is refused whether or not a comparison was asked for.
+     * Nulling before `readBlock` would turn every off-list block in a
+     * comparison into a silent success.
+     *
+     * Only this field changes. Variety and both dates are the values that came
+     * out of the checks above, unaltered, because a comparison holds
+     * everything except the block fixed.
+     */
+    block: raw.block_comparison ? null : block,
+    blockComparison: raw.block_comparison,
+    highest: raw.highest,
     variety,
     dateFrom: raw.date_from,
     dateToExclusive: raw.date_to_exclusive,
@@ -170,9 +213,13 @@ export function checkIntent(raw: RawIntent): Filter {
 }
 
 /** What the customer is shown as the system's reading of their question. */
-export function describeFilter(filter: Filter): Record<string, string | null> {
+export function describeFilter(filter: Filter): Record<string, string | boolean | null> {
   return {
     block: filter.block,
+    block_comparison: filter.blockComparison,
+    // Only meaningful next to a comparison, and null otherwise rather than a
+    // stray true sitting beside a single-block answer it had no part in.
+    highest: filter.blockComparison ? filter.highest : null,
     variety: filter.variety,
     date_from: filter.dateFrom,
     date_to_exclusive: filter.dateToExclusive,

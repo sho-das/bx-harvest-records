@@ -11,6 +11,7 @@
  */
 
 import type { Pool } from 'pg';
+import { BLOCKS, type Block } from '../import/rules';
 import type { Filter } from './intent.schema';
 
 export type CountedRow = {
@@ -48,13 +49,22 @@ export type ParkedRow = {
   options: ParkedOption[];
 };
 
-/** Shared WHERE for rows that definitely match. NULL in a filter means "all". */
-const MATCHES = `
-      ($1::text IS NULL OR block   = $1)
-  AND ($2::text IS NULL OR variety = $2)
-  AND ($3::date IS NULL OR harvest_date >= $3)
-  AND ($4::date IS NULL OR harvest_date <  $4)
+/**
+ * Shared WHERE for rows that definitely match. NULL in a filter means "all".
+ *
+ * Written once and rendered with or without a table prefix. `selectTopBlocks`
+ * joins a second table, so there `block` on its own is ambiguous. One
+ * definition means the block comparison cannot drift from the answer it is
+ * comparing.
+ */
+const matches = (prefix = '') => `
+      ($1::text IS NULL OR ${prefix}block   = $1)
+  AND ($2::text IS NULL OR ${prefix}variety = $2)
+  AND ($3::date IS NULL OR ${prefix}harvest_date >= $3)
+  AND ($4::date IS NULL OR ${prefix}harvest_date <  $4)
 `;
+
+const MATCHES = matches();
 
 function params(filter: Filter) {
   return [filter.block, filter.variety, filter.dateFrom, filter.dateToExclusive];
@@ -84,6 +94,71 @@ export async function selectAnswerKg(pool: Pool, filter: Filter): Promise<string
     params(filter),
   );
   return result.rows[0].answer_kg as string;
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Which block is highest
+// ---------------------------------------------------------------------------
+
+/**
+ * The blocks at one end of the comparison. Usually one.
+ *
+ * Postgres picks the extreme, not TypeScript. The per-block figures cross as
+ * strings, for the reason at the top of this file, and the largest of
+ * "4445.000", "1002.439", "3170.000" and "0.000" is only correct by string
+ * order because every value happens to have four digits before the point. A
+ * block at "999.000" would sort above "1002.439" and win a comparison it lost.
+ *
+ * `unnest($5)` drives the query from the block list rather than from the rows,
+ * so a block with nothing in it still ranks, at zero. Every filter predicate
+ * sits in the ON clause: moved to WHERE they would turn the LEFT JOIN into an
+ * inner one and the empty block would vanish, which is the whole thing this
+ * exists to avoid.
+ *
+ * That matters most in the other direction. Asked which block picked the
+ * least, a block with no rows at all is the honest answer at 0.000, and it is
+ * only in the running because the join keeps it. The caller says plainly that
+ * it recorded nothing, rather than letting 0.000 read as a small harvest.
+ *
+ * Every block ties when nothing matches at all. Four blocks at zero is the
+ * honest answer either way, and the caller says so rather than naming one.
+ */
+export async function selectExtremeBlocks(
+  pool: Pool,
+  filter: Filter,
+  highest: boolean,
+): Promise<Block[]> {
+  // A lookup on a boolean, never a string built from the request. The only two
+  // values that can ever reach the SQL text are written on this line.
+  const extreme = highest ? 'MAX' : 'MIN';
+
+  const result = await pool.query(
+    `WITH per_block AS (
+       SELECT b.block,
+              COALESCE(SUM(r.quantity_kg), 0)::numeric(12,3) AS kg
+         FROM unnest($5::text[]) AS b(block)
+         LEFT JOIN harvest_record r
+                ON r.block = b.block
+               AND r.status = 'counted'
+               AND ${matches('r.')}
+        GROUP BY b.block
+     )
+     SELECT block
+       FROM per_block
+      WHERE kg = (SELECT ${extreme}(kg) FROM per_block)
+      ORDER BY block`,
+    [...params(filter), BLOCKS],
+  );
+
+  const top: Block[] = [];
+  for (const row of result.rows) {
+    const block = BLOCKS.find((known) => known === row.block);
+    // Unreachable while $5 is BLOCKS. It is here so that stops being an
+    // assumption the day the list comes from somewhere else.
+    if (!block) throw new Error(`selectExtremeBlocks returned an unknown block: ${row.block}`);
+    top.push(block);
+  }
+  return top;
 }
 
 // ---------------------------------------------------------------------------
