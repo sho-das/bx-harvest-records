@@ -36,6 +36,10 @@ const QUESTION: Filter = {
   variety: 'Sweetheart',
   dateFrom: '2026-03-01',
   dateToExclusive: '2026-04-01',
+  // Carried on the filter, read by no query. Set to what the customer would
+  // have typed so this is the real shape, not a stub.
+  blockAsWritten: 'Block 3',
+  varietyAsWritten: 'Sweetheart',
 };
 
 let failures = 0;
@@ -53,12 +57,55 @@ function check(label: string, actual: unknown, expected: unknown): void {
   }
 }
 
+/**
+ * Every figure below is the file as shipped, read by the rules in this repo,
+ * with nobody having answered anything. A saved decision changes what a row
+ * means, so those figures stop being the truth: answer "kg" on line 11 and the
+ * counted total is 4380.000, correctly.
+ *
+ * So this stops rather than checking. The two alternatives are worse:
+ *
+ *   Clear the decisions first. That deletes what a person recorded, to make a
+ *   test pass. It is the only option here that can lose work.
+ *
+ *   Check both baselines. There is no second baseline to write down. The
+ *   number moves with whichever questions were answered and how, so the
+ *   expected value would have to be computed the same way the code under test
+ *   computes it, which checks nothing.
+ *
+ * Stopping costs one command to undo, and it cannot report a wrong number as a
+ * right one.
+ */
+async function refuseIfDecided(pool: ReturnType<typeof getPool>): Promise<void> {
+  const result = await pool.query(
+    `SELECT scope, field, subject, chosen_label FROM decision ORDER BY decided_at`,
+  );
+  if (result.rowCount === 0) return;
+
+  console.log('\nNothing was checked.\n');
+  console.log(
+    `This script checks the file as it is read with no decisions saved, and ${result.rowCount} ` +
+      `${result.rowCount === 1 ? 'is' : 'are'} saved:\n`,
+  );
+  for (const row of result.rows) {
+    console.log(`  ${row.field} on ${row.scope} "${row.subject}" answered "${row.chosen_label}"`);
+  }
+  console.log(
+    '\nAn answer changes what a row means, so the totals below would be wrong rather\n' +
+      'than broken. Clear them and import again to check the file as shipped:\n\n' +
+      '  psql "$DATABASE_URL" -c "DELETE FROM decision;" && npm run import\n',
+  );
+  await closePool();
+  process.exit(1);
+}
+
 async function main() {
   const pool = getPool();
+  await refuseIfDecided(pool);
 
   console.log('\nThe answer');
   const answer = await selectAnswerKg(pool, QUESTION);
-  check('POST /ask returns 3170.000', answer, '3170.000');
+  check('the counted total is 3170.000', answer, '3170.000');
 
   const counted = await selectCountedRows(pool, QUESTION);
   check('from lines 7, 17 and 26', counted.map((r) => r.line), [7, 17, 26]);
@@ -193,7 +240,7 @@ async function main() {
   check('8617.439 means the block filter did not apply to a single-block question', noBlock, '8617.439');
 
   check(
-    '  and the endpoint agrees 4380.000 is what confirming kg would give',
+    '  and the parked option prices 4380.000 for confirming kg',
     unitPark?.options.find((o) => o.label === 'kg')?.answer_becomes_kg,
     '4380.000',
   );

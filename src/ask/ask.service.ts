@@ -2,7 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { getPool } from '../db/pool';
 import { BLOCKS, type Block } from '../import/rules';
 import { LlmService } from './llm';
-import { IntentRejected, checkIntent, describeFilter, type Filter } from './intent.schema';
+import {
+  IntentRejected,
+  checkIntent,
+  describeFilter,
+  untracedFields,
+  type Filter,
+  type UntracedField,
+} from './intent.schema';
 import {
   selectAnswerKg,
   selectCountedRows,
@@ -10,9 +17,11 @@ import {
   selectParkedRows,
   selectSourceSummary,
   selectExtremeBlocks,
+  selectSettledRows,
   type CountedRow,
   type NotCountedRow,
   type ParkedRow,
+  type SettledRow,
 } from './queries';
 
 type Understood = Record<string, string | boolean | null>;
@@ -24,9 +33,12 @@ export type SingleAnswer = {
   comparison: false;
   answer_kg: string;
   understood_as: Understood;
+  untraced: UntracedField[];
   counted: CountedRow[];
   not_counted: NotCountedRow[];
   parked: ParkedRow[];
+  /** Questions already answered by a person. Shown so they can be changed. */
+  settled: SettledRow[];
   source: { file: string; rows_read: number; rows_in_scope: number };
   read_by: ReadBy;
 };
@@ -50,6 +62,7 @@ export type ComparisonAnswer = {
   tied: boolean;
   by_block: { block: Block; answer_kg: string }[];
   understood_as: Understood;
+  untraced: UntracedField[];
   read_by: ReadBy;
 };
 
@@ -99,19 +112,30 @@ export class AskService {
     const filter = checkIntent(intent);
     const readBy = { provider, model };
 
+    // What the filter says, next to what the customer actually wrote. The
+    // whitelist can only ask whether a value is real; this asks whether it is
+    // theirs, which is the question a substitution fails and a whitelist
+    // cannot see.
+    const untraced = untracedFields(question, filter);
+
     return filter.blockComparison
-      ? this.compareBlocks(filter, filter.highest, readBy)
-      : this.answerOne(filter, readBy);
+      ? this.compareBlocks(filter, filter.highest, untraced, readBy)
+      : this.answerOne(filter, untraced, readBy);
   }
 
   /** One filter, one number, and every row the number left out. */
-  private async answerOne(filter: Filter, readBy: ReadBy): Promise<SingleAnswer> {
+  private async answerOne(
+    filter: Filter,
+    untraced: UntracedField[],
+    readBy: ReadBy,
+  ): Promise<SingleAnswer> {
     const pool = getPool();
-    const [answerKg, counted, notCounted, parked, source] = await Promise.all([
+    const [answerKg, counted, notCounted, parked, settled, source] = await Promise.all([
       selectAnswerKg(pool, filter),
       selectCountedRows(pool, filter),
       selectNotCountedRows(pool, filter),
       selectParkedRows(pool, filter),
+      selectSettledRows(pool, filter),
       selectSourceSummary(pool, filter),
     ]);
 
@@ -120,9 +144,11 @@ export class AskService {
       comparison: false,
       answer_kg: answerKg,
       understood_as: describeFilter(filter),
+      untraced,
       counted,
       not_counted: notCounted,
       parked,
+      settled,
       source,
       read_by: readBy,
     };
@@ -142,6 +168,7 @@ export class AskService {
   private async compareBlocks(
     filter: Filter,
     highest: boolean,
+    untraced: UntracedField[],
     readBy: ReadBy,
   ): Promise<ComparisonAnswer> {
     const pool = getPool();
@@ -191,6 +218,7 @@ export class AskService {
       tied: answerBlock.length > 1,
       by_block: byBlock,
       understood_as: describeFilter(filter),
+      untraced,
       read_by: readBy,
     };
   }

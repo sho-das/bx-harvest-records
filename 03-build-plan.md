@@ -291,9 +291,9 @@ match what got built. What differs:
 - **Five queries per request, not three.** Counted rows, rows left out and
   parked rows each needed their own statement, plus a source summary so the
   response can say 26 rows were read.
-- **45 tests, not eight.** The eight parser tests are all there. The rest cover
-  the model layer and the block comparison, neither of which this plan thought
-  about.
+- **79 tests, not eight.** The eight parser tests are all there. The rest cover
+  the model layer, the block comparison and the decision path, none of which
+  this plan thought about.
 - **A page at `GET /`.** Not in this plan. C2 was cut, as the plan said it
   would be, and the page went into that slot. A JSON response does not show
   that picking two options gives 5,560.000 and not 4,380.000.
@@ -329,3 +329,17 @@ built early rather than last, which is in `DECISIONS.md`.
   step here and it does not copy assets, so a `.html` file under `src/`
   compiled to nothing and the route had to guess a path at request time - one
   guess for the compiled output, another for `tsx`.
+- **Cut 3 was built.** "No endpoint to record a parked answer" is now
+  `POST /decision`, and a fourth table, `decision`, holds what was answered. It
+  takes a line, a field and an option label, never a value, and it re-imports
+  the file rather than updating the row it was told about, so there is one
+  implementation of what a row means. A `variety` answer is keyed on the word
+  and a `unit` answer on the row as written, never on the line number: a
+  re-export with one row inserted moves every line below it.
+- **The typo rule generalised.** B1 was a hand-written entry mapping
+  `sweethart` to `Sweetheart`. One entry per typo does not survive the second
+  file, so the reason became the rule: edit distance, restricted to the names
+  the writer demonstrably uses on their own rows, declining on no peers, a tie,
+  or a distance past a quarter of the word. Two new parks came out of it - a
+  variety nothing settles, and two identical rows with no note to separate
+  them.
