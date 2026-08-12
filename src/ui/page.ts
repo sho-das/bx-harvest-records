@@ -1,4 +1,22 @@
-<!doctype html>
+/**
+ * The page served at GET /.
+ *
+ * The markup lives in TypeScript rather than in a .html file because `tsc` is
+ * the only build step this project has, and it does not copy assets. A .html
+ * file under src/ would compile to nothing, so the controller would have to
+ * find it on disk at request time and guess at the path - one guess for running
+ * the compiled output, another for running under tsx. Holding the page here
+ * means it lands in dist with everything else and the route has nothing to look
+ * up.
+ *
+ * The cost is that this file has no HTML syntax highlighting, and a change to
+ * the page needs a rebuild rather than a browser refresh.
+ *
+ * Three characters are escaped for the template literal and nothing else is:
+ * a backslash, a backtick, and the two characters `${`. The rest of the string
+ * is the page exactly as the browser receives it.
+ */
+export const PAGE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -178,6 +196,13 @@
   tr.plain td { border-bottom: none; }
   .empty { color: var(--muted); font-size: 14px; padding: 10px 0; }
 
+  /* The block or blocks holding the largest figure. Weight and a marker, not
+     colour alone, so it still reads if colour does not arrive. */
+  tr.top td { font-weight: 600; }
+  /* The word is written into the markup rather than into content:, because it
+     changes with the direction and a stylesheet cannot read the answer. */
+  .mark { font-weight: 400; color: var(--muted); margin-left: 8px; }
+
   .park {
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -247,6 +272,12 @@
       <div id="answerBox"></div>
     </section>
 
+    <!-- Comparison mode only. Four blocks, the same question asked of each. -->
+    <section id="comparisonSection" class="hidden">
+      <h2>Every block, same question</h2>
+      <div id="comparison"></div>
+    </section>
+
     <section id="countedSection" class="hidden">
       <h2>Rows counted</h2>
       <div id="counted"></div>
@@ -298,6 +329,8 @@
     result: document.getElementById('result'),
     answerBox: document.getElementById('answerBox'),
     askedBox: document.getElementById('askedBox'),
+    comparisonSection: document.getElementById('comparisonSection'),
+    comparison: document.getElementById('comparison'),
     countedSection: document.getElementById('countedSection'),
     counted: document.getElementById('counted'),
     notCountedSection: document.getElementById('notCountedSection'),
@@ -356,9 +389,20 @@
     return Number(p[2]) + ' ' + MONTHS[Number(p[1]) - 1] + ' ' + Number(p[0]);
   }
 
-  function describe(u) {
+  function describe(u, blocks) {
     var bits = [];
-    bits.push(u.block ? 'Block ' + u.block : 'every block');
+    // In comparison mode the block filter is null, and "every block" would
+    // read as if the filter had been dropped. It was not dropped: the customer
+    // asked about all of them, and the blocks are named so they can see which.
+    if (u.block_comparison) {
+      // The direction is named here as well as in the answer box. It is the
+      // one word that decides whether the block shown is the right one, and
+      // "comparing B1, B2, B3, B4" alone does not say which end was asked for.
+      bits.push('comparing ' + (blocks && blocks.length ? blocks.join(', ') : 'every block') +
+                ', ' + (u.highest === false ? 'lowest' : 'highest') + ' first');
+    } else {
+      bits.push(u.block ? 'Block ' + u.block : 'every block');
+    }
     bits.push(u.variety ? u.variety : 'every variety');
     if (u.date_from && u.date_to_exclusive) {
       bits.push(longDate(u.date_from) + ' up to but not including ' + longDate(u.date_to_exclusive));
@@ -384,9 +428,9 @@
     // The body is wrapped in single quotes for the shell, so a single quote
     // inside the question has to be closed, escaped and reopened. The JSON
     // itself is untouched - only the shell quoting differs.
-    var shellSafe = bodyFor(question).replace(/'/g, "'\\''");
-    return "curl -s -X POST " + location.host + "/ask \\\n" +
-           "  -H 'Content-Type: application/json' \\\n" +
+    var shellSafe = bodyFor(question).replace(/'/g, "'\\\\''");
+    return "curl -s -X POST " + location.host + "/ask \\\\\\n" +
+           "  -H 'Content-Type: application/json' \\\\\\n" +
            "  -d '" + shellSafe + "'";
   }
 
@@ -403,11 +447,13 @@
   function clearResult() {
     state = { base: null, parks: [], chosen: {} };
     els.result.classList.add('hidden');
+    els.comparisonSection.classList.add('hidden');
     els.countedSection.classList.add('hidden');
     els.notCountedSection.classList.add('hidden');
     els.parkedSection.classList.add('hidden');
     els.answerBox.innerHTML = '';
     els.askedBox.innerHTML = '';
+    els.comparison.innerHTML = '';
     els.counted.innerHTML = '';
     els.notCounted.innerHTML = '';
     els.parked.innerHTML = '';
@@ -561,6 +607,86 @@
       '<div class="understood">' + esc(describe(data.understood_as)) + '</div>';
   }
 
+  // ---------------------------------------------------------------------------
+  // Comparison
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The answer to "which block" is a block, so a block is what goes in the
+   * large type. The winning figure sits under it as supporting detail, because
+   * a number in the answer box is a number the customer will read as the
+   * answer, and nobody asked for one.
+   */
+  function comparisonHeadline(data) {
+    var winners = data.answer_block || [];
+    var figure = null;
+    (data.by_block || []).forEach(function (row) {
+      if (winners.indexOf(row.block) !== -1) figure = row.answer_kg;
+    });
+
+    var end = data.highest === false ? 'Lowest' : 'Highest';
+
+    // Every block at zero is a tie between all of them, and it is not a tie for
+    // the most. Nothing was picked anywhere, and that is the answer.
+    var allZero = (data.by_block || []).length > 0 &&
+      (data.by_block || []).every(function (row) { return toMilli(row.answer_kg) === 0n; });
+
+    if (allZero) {
+      return { big: 'None', detail: 'No rows matched in any block. That is the answer, not a failure.' };
+    }
+
+    // Asked for the least, a block that recorded nothing wins at 0.000. That is
+    // true and it is not the same as picking a little, so it says which it is
+    // rather than letting 0.000 read as a small harvest.
+    var zeroWinner = figure !== null && toMilli(figure) === 0n;
+    var nothingAtAll = zeroWinner
+      ? ' ' + (winners.length > 1 ? 'Those blocks recorded' : 'That block recorded') +
+        ' no rows at all, which is not the same as a small harvest.'
+      : '';
+
+    if (winners.length > 1) {
+      return {
+        big: winners.join(' and '),
+        detail: 'A tie for ' + end.toLowerCase() + '. ' + winners.length +
+                ' blocks are level at ' + figure + ' kg.' + nothingAtAll
+      };
+    }
+    return {
+      big: winners.join(''),
+      detail: end + ' of the four, at ' + figure + ' kg.' + nothingAtAll
+    };
+  }
+
+  function renderComparison(data) {
+    var blocks = (data.by_block || []).map(function (row) { return row.block; });
+    var winners = data.answer_block || [];
+    var head = comparisonHeadline(data);
+
+    els.result.classList.remove('hidden');
+    els.answerBox.innerHTML =
+      '<div class="answer">' + esc(head.big) + '</div>' +
+      '<div class="understood">' + esc(head.detail) + '</div>' +
+      '<div class="understood">' + esc(describe(data.understood_as, blocks)) + '</div>';
+
+    els.comparisonSection.classList.remove('hidden');
+    var word = data.highest === false ? 'least' : 'most';
+    var html = '<table><thead><tr><th>Block</th><th class="n">Kilograms</th>' +
+      '</tr></thead><tbody>';
+    (data.by_block || []).forEach(function (row) {
+      var isTop = winners.indexOf(row.block) !== -1;
+      html += '<tr' + (isTop ? ' class="top"' : '') + '>' +
+        '<td class="num">' + esc(row.block) +
+        (isTop ? '<span class="mark">&larr; ' + esc(word) + '</span>' : '') + '</td>' +
+        '<td class="n num">' + esc(row.answer_kg) + '</td></tr>';
+    });
+    els.comparison.innerHTML = html + '</tbody></table>';
+
+    // Nothing is parked in comparison mode, so there is nothing to price.
+    els.totalBody.innerHTML =
+      '<p class="hint">A comparison has no single total to move. Ask about one ' +
+      'block to see the rows behind its figure.</p>';
+  }
+
   function show(data) {
     clearResult();
 
@@ -569,6 +695,14 @@
         data.reason || 'The question was not answered, and no reason was given.',
         data.question
       );
+      return;
+    }
+
+    // Two shapes come back from one endpoint, and \`comparison\` is the only
+    // field that separates them. Branching on a missing field instead would
+    // make an absent \`counted\` array look like a comparison.
+    if (data.comparison === true) {
+      renderComparison(data);
       return;
     }
 
@@ -635,7 +769,7 @@
         return;
       }
       var reason = (result.data && (result.data.reason || result.data.message)) || null;
-      // `question` here is the local variable, not a field off the response.
+      // \`question\` here is the local variable, not a field off the response.
       // On these two paths there may be no response body to read it from, and
       // the local one is the same string for the same reason: the customer
       // typed it into the box above.
@@ -670,3 +804,4 @@
 </script>
 </body>
 </html>
+`;

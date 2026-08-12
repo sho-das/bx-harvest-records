@@ -57,8 +57,8 @@ filter that was worked out.
 ## Checking it
 
 ```bash
-npm test        # 28 unit tests, no database and no network needed
-npm run verify  # 28 checks against the loaded data
+npm test        # 45 unit tests, no database and no network needed
+npm run verify  # 38 checks against the loaded data
 ```
 
 ## What the response contains
@@ -66,8 +66,10 @@ npm run verify  # 28 checks against the loaded data
 ```json
 {
   "answered": true,
+  "comparison": false,
   "answer_kg": "3170.000",
-  "understood_as": { "block": "B3", "variety": "Sweetheart",
+  "understood_as": { "block": "B3", "block_comparison": false, "highest": null,
+                     "variety": "Sweetheart",
                      "date_from": "2026-03-01", "date_to_exclusive": "2026-04-01" },
   "counted":     [ { "line": 7, "quantity_kg": "990.000",
                      "read_as": "variety written 'sweethart', read as Sweetheart" }, ... ],
@@ -85,6 +87,44 @@ npm run verify  # 28 checks against the loaded data
 `rows_in_scope` is 7: three counted, three parked, one superseded. The customer
 can add those up and see that no row disappeared between the file and the
 answer.
+
+### Comparing the blocks
+
+"Which block harvested the most Sweetheart in March 2026?" is a different
+question. The answer is a block, not a weight, so the response carries no
+`answer_kg` at all. Nothing sits where a number would be read as the answer.
+
+```json
+{
+  "answered": true,
+  "comparison": true,
+  "highest": true,
+  "answer_block": ["B1"],
+  "tied": false,
+  "by_block": [ { "block": "B1", "answer_kg": "4445.000" },
+                { "block": "B2", "answer_kg": "1002.439" },
+                { "block": "B3", "answer_kg": "3170.000" },
+                { "block": "B4", "answer_kg": "0.000" } ],
+  "understood_as": { "block": null, "block_comparison": true, "highest": true,
+                     "variety": "Sweetheart",
+                     "date_from": "2026-03-01", "date_to_exclusive": "2026-04-01" }
+}
+```
+
+Four things about that shape:
+
+- **`highest` is false for "which block picked the least".** Answering one with
+  the other is a wrong answer, not a near miss, so the direction is a field the
+  model sets from the word the question used.
+- **All four blocks always appear.** B4 harvested no Sweetheart in March, and
+  it comes back as `0.000` rather than being missing. A `GROUP BY` would have
+  dropped it, so the four figures come from four queries, one per block.
+- **`answer_block` is a list.** Two blocks level at the top return both, with
+  `tied: true`. Nothing picks one out of a tie.
+- **The counted, not-counted and parked lists do not appear.** They describe one
+  filter, and a comparison has four.
+
+`comparison` is the field to branch on. It is present either way.
 
 ## Why the answer is 3,170 and not something else
 
@@ -148,9 +188,8 @@ src/
   ask/queries.ts                 the statements that produce every number
   ask/ask.service.ts             model, then guard, then Postgres
   ask/ask.controller.ts          POST /ask
-  ui/ui.controller.ts            GET / , returns public/index.html
-public/
-  index.html                     the whole UI: one file, no build step
+  ui/ui.controller.ts            GET / , returns the page
+  ui/page.ts                     the whole UI: one string, no build step
 scripts/
   import.ts                      npm run import
   verify.ts                      npm run verify
