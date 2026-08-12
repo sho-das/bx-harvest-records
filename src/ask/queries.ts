@@ -38,6 +38,8 @@ export type ParkedOption = {
   row_becomes_kg: string | null;
   in_range: boolean;
   answer_becomes_kg: string | null;
+  /** A person picked this one, and the row is still parked anyway. */
+  chosen: boolean;
 };
 
 export type ParkedRow = {
@@ -46,6 +48,8 @@ export type ParkedRow = {
   question: string;
   evidence: string | null;
   free_text: boolean;
+  /** What a person answered, or null while nobody has. */
+  chosen_label: string | null;
   options: ParkedOption[];
 };
 
@@ -177,10 +181,18 @@ export async function selectCountedRows(pool: Pool, filter: Filter): Promise<Cou
             quantity_kg::text AS quantity_kg,
             NULLIF(
               CONCAT_WS('; ',
-                CASE WHEN variety_raw IS DISTINCT FROM variety
-                     THEN 'variety written ' || quote_literal(variety_raw) || ', read as ' || variety END,
-                CASE WHEN block_raw IS DISTINCT FROM block
-                     THEN 'block written ' || quote_literal(block_raw) || ', read as ' || block END,
+                -- When the file itself settled a spelling, say who settled it.
+                -- resolved_note carries the evidence; the two CASE branches are
+                -- the fallback for a value a lookup table knew outright.
+                COALESCE(
+                  resolved_note,
+                  NULLIF(CONCAT_WS('; ',
+                    CASE WHEN variety_raw IS DISTINCT FROM variety
+                         THEN 'variety written ' || quote_literal(variety_raw) || ', read as ' || variety END,
+                    CASE WHEN block_raw IS DISTINCT FROM block
+                         THEN 'block written ' || quote_literal(block_raw) || ', read as ' || block END
+                  ), '')
+                ),
                 CASE WHEN harvest_date_raw IS DISTINCT FROM harvest_date::text
                      THEN 'date written ' || quote_literal(harvest_date_raw) || ', read as ' || harvest_date::text END,
                 CASE WHEN quantity_raw LIKE '%,%'
@@ -292,6 +304,8 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
      applied AS (
        SELECT r.source_line, r.id AS record_id,
               q.id AS question_id, q.field, q.question, q.evidence, q.free_text,
+              d.chosen_label,
+              (o.label = d.chosen_label) AS chosen,
               o.id AS option_id, o.label, o.sort_order,
               COALESCE(o.quantity_kg,  r.quantity_kg)  AS row_kg,
               COALESCE(o.harvest_date, r.harvest_date) AS row_date,
@@ -302,6 +316,16 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
          FROM harvest_record r
          JOIN parked_question q ON q.record_id = r.id
          LEFT JOIN parked_option o ON o.question_id = q.id
+         -- A question can be answered and still leave the row parked: "not a
+         -- variety in this data" supplies no variety, so the row never
+         -- completes. Without this the page asked again as if nobody had
+         -- answered, which is the same as forgetting.
+         LEFT JOIN decision d
+                ON d.field = q.field
+               AND d.subject = CASE d.scope
+                                 WHEN 'spelling' THEN r.variety_subject
+                                 ELSE r.row_subject
+                               END
         WHERE r.status = 'parked'
           AND ($1::text IS NULL OR r.block   = $1 OR r.block   IS NULL)
           AND ($2::text IS NULL OR r.variety = $2 OR r.variety IS NULL)
@@ -314,6 +338,7 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
          FROM applied a
      )
      SELECT a.source_line AS line, a.field, a.question, a.evidence, a.free_text,
+            a.chosen_label, a.chosen,
             a.option_id, a.label, a.sort_order, a.in_range,
             a.row_kg::text AS row_becomes_kg,
             CASE
@@ -341,6 +366,7 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
         question: row.question,
         evidence: row.evidence,
         free_text: row.free_text,
+        chosen_label: row.chosen_label ?? null,
         options: [],
       };
       byLine.set(key, parked);
@@ -351,6 +377,7 @@ export async function selectParkedRows(pool: Pool, filter: Filter): Promise<Park
         row_becomes_kg: row.row_becomes_kg,
         in_range: row.in_range,
         answer_becomes_kg: row.answer_becomes_kg,
+        chosen: row.chosen === true,
       });
     }
   }
@@ -372,4 +399,88 @@ export async function selectSourceSummary(
     params(filter),
   );
   return result.rows[0];
+}
+
+// ---------------------------------------------------------------------------
+// 6. Questions a person has already answered
+// ---------------------------------------------------------------------------
+
+export type SettledOption = {
+  label: string;
+  chosen: boolean;
+};
+
+export type SettledRow = {
+  line: number;
+  field: string;
+  question: string;
+  chosen_label: string;
+  decided_at: string;
+  options: SettledOption[];
+};
+
+/**
+ * A question that was asked once, answered, and is not being asked again.
+ *
+ * The row counts now, so it is gone from `selectParkedRows`, which only ever
+ * returns rows still waiting. It comes back here instead, with every option it
+ * had and a mark on the one that was picked. A decision a person cannot see is
+ * a decision they cannot correct, and correcting it is the whole reason the
+ * other options are still here.
+ *
+ * Joined on what the decision was keyed on, and the two scopes key on
+ * different things:
+ *
+ *   row       `row_subject`, the row as written. Not the line number: a grower
+ *             who re-exports with a row inserted moves every line below it, and
+ *             the decision would then be shown against the wrong row.
+ *   spelling  `variety_subject`, the variety token as written. A spelling
+ *             decision belongs to the word, not to any one row, so every row
+ *             carrying that word shows it.
+ *
+ * A row cannot hold both for one field: `POST /decision` sends `variety` to
+ * `spelling` and everything else to `row`. The reader below still guards
+ * against a repeated option, because a duplicate here would print the same
+ * choice twice rather than fail.
+ */
+export async function selectSettledRows(pool: Pool, filter: Filter): Promise<SettledRow[]> {
+  const result = await pool.query(
+    `SELECT r.source_line AS line, q.field, q.question,
+            d.scope, d.chosen_label, d.decided_at::text AS decided_at,
+            o.label, o.sort_order,
+            (o.label = d.chosen_label) AS chosen
+       FROM harvest_record r
+       JOIN parked_question q ON q.record_id = r.id
+       JOIN decision d
+         ON d.field = q.field
+        AND d.subject = CASE d.scope
+                          WHEN 'spelling' THEN r.variety_subject
+                          ELSE r.row_subject
+                        END
+       LEFT JOIN parked_option o ON o.question_id = q.id
+      WHERE r.status = 'counted' AND ${matches('r.')}
+      ORDER BY r.source_line, o.sort_order NULLS FIRST`,
+    params(filter),
+  );
+
+  const byQuestion = new Map<string, SettledRow>();
+  for (const row of result.rows) {
+    const key = `${row.line}:${row.field}`;
+    let settled = byQuestion.get(key);
+    if (!settled) {
+      settled = {
+        line: row.line,
+        field: row.field,
+        question: row.question,
+        chosen_label: row.chosen_label,
+        decided_at: row.decided_at,
+        options: [],
+      };
+      byQuestion.set(key, settled);
+    }
+    if (row.label !== null && !settled.options.some((option) => option.label === row.label)) {
+      settled.options.push({ label: row.label, chosen: row.chosen === true });
+    }
+  }
+  return [...byQuestion.values()];
 }

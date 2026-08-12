@@ -16,7 +16,14 @@ import {
   parseDate,
   classifyLine,
 } from './parse';
-import { readVariety, readBlock, UNIT_FACTOR_KG } from './rules';
+import {
+  readVariety,
+  readBlock,
+  resolveFromPeers,
+  VARIETY_SPELLINGS,
+  BLOCK_SPELLINGS,
+  UNIT_FACTOR_KG,
+} from './rules';
 
 describe('the rows this file gets wrong', () => {
   // Line 4: B1,Lapins,2026-03-03,"1,240",kg,J Silvestre,
@@ -112,15 +119,53 @@ describe('the rows this file gets wrong', () => {
 
 describe('the spelling the file settles itself', () => {
   // Line 7: B3,sweethart,2026-03-06,990,kg,R Craig,
-  it('line 7: "sweethart" is Sweetheart', () => {
-    // R Craig spells it correctly on his six other Block 3 rows, so the file
-    // answers this one. Lookup table, not fuzzy matching: fuzzy matching
-    // would silently merge two real varieties one day.
-    expect(readVariety('sweethart')).toBe('Sweetheart');
+  it('the table does not know "sweethart", and does not guess', () => {
+    // It used to hold an entry for it. One entry per typo does not survive the
+    // second file, and a table that guesses is a table that merges two real
+    // varieties the day somebody plants Sweet Ann.
+    expect(readVariety('sweethart')).toBeNull();
     expect(readVariety('Sweetheart')).toBe('Sweetheart');
-
-    // A variety nobody has heard of is null, not a near miss.
     expect(readVariety('Sweetcorn')).toBeNull();
+  });
+
+  it('separators are not spelling, so Sweet-heart is Sweetheart', () => {
+    // Removing a hyphen cannot turn one name into a different one. This is the
+    // one generalisation that carries no risk at all.
+    expect(readVariety('Sweet-heart')).toBe('Sweetheart');
+    expect(readVariety('sweet heart')).toBe('Sweetheart');
+    expect(readVariety('Sweetheart.')).toBe('Sweetheart');
+    expect(readBlock('Block-3')).toBe('B3');
+  });
+
+  it('line 7: the file settles "sweethart", from what R Craig writes elsewhere', () => {
+    // The real peer group from the file: six Sweetheart rows and one Lapins.
+    // Distance picks between the two names he demonstrably uses. It is never
+    // let loose on the whole variety list.
+    const rCraigWrites = [
+      'Sweetheart', 'Sweetheart', 'Sweetheart',
+      'Sweetheart', 'Sweetheart', 'Sweetheart', 'Lapins',
+    ] as const;
+
+    expect(resolveFromPeers('sweethart', VARIETY_SPELLINGS, rCraigWrites)).toBe('Sweetheart');
+  });
+
+  it('the rule declines rather than guesses, three ways', () => {
+    // No peers. One row vouches for nothing.
+    expect(resolveFromPeers('sweethart', VARIETY_SPELLINGS, [])).toBeNull();
+
+    // Too far. This is the one that matters: Sweet Ann is a real cultivar, and
+    // a grader who only writes Sweetheart must not turn it into Sweetheart.
+    expect(resolveFromPeers('Sweet Ann', VARIETY_SPELLINGS, ['Sweetheart'])).toBeNull();
+    expect(resolveFromPeers('record lost', VARIETY_SPELLINGS, ['Sweetheart'])).toBeNull();
+
+    // A tie is the file failing to settle it, which is a question and not a
+    // coin toss. "block" is one edit from every block there is, so a grader
+    // who works two of them settles nothing.
+    expect(resolveFromPeers('block', BLOCK_SPELLINGS, ['B1', 'B2'])).toBeNull();
+
+    // One block, no tie, and it still declines: "b" is one edit from "b1", and
+    // one edit is most of a two-character word.
+    expect(resolveFromPeers('b', BLOCK_SPELLINGS, ['B1'])).toBeNull();
   });
 
   it('"Block 3" is B3, and a block that does not exist is null', () => {

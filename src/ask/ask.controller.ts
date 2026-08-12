@@ -18,7 +18,7 @@ const AskBody = z.object({
 });
 
 /**
- * The one endpoint.
+ * The endpoint that answers. `POST /decision` is the one that writes.
  *
  * POST, not GET with a query parameter. A question written in English needs
  * URL encoding, and a URL is written to the access log of every proxy it

@@ -203,6 +203,18 @@ export const PAGE = `<!doctype html>
      changes with the direction and a stylesheet cannot read the answer. */
   .mark { font-weight: 400; color: var(--muted); margin-left: 8px; }
 
+  /* A reading the customer's own words do not account for. Not a refusal, so
+     not the red box, but it sits directly under the number rather than in the
+     grey line, because grey text under a large figure does not get read. */
+  .untraced {
+    margin-top: 10px;
+    padding: 9px 12px;
+    border-left: 3px solid var(--refusal);
+    background: var(--refusal-bg);
+    font-size: 14px;
+  }
+  .untraced strong { font-weight: 600; }
+
   .park {
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -218,6 +230,18 @@ export const PAGE = `<!doctype html>
   .opt[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .opt[aria-pressed="true"] .detail { color: var(--accent-ink); opacity: 0.85; }
   .needs-person { margin-top: 12px; font-size: 14px; color: var(--muted); }
+
+  /* The word "saved" rides inside the option button, so what a person answered
+     is on the answer itself rather than in a sentence beside the list. */
+  .opt .flag { float: right; font-weight: 400; font-size: 12px; color: var(--muted); }
+  .opt[aria-pressed="true"] .flag { color: var(--accent-ink); opacity: 0.85; }
+  .park .save { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .park .save .hint { font-size: 13px; }
+  .park .save .failed { color: var(--refusal); font-size: 13px; }
+  /* Already answered, so it is quieter than a question still waiting. */
+  .park.settled { border-style: dashed; }
+  .park.settled .q { font-weight: 400; }
+  .park .decided { color: var(--muted); font-size: 13px; margin-top: 6px; }
 
   .total {
     background: var(--panel);
@@ -240,7 +264,7 @@ export const PAGE = `<!doctype html>
 
 <header>
   <h1>Harvest question</h1>
-  <p>One endpoint. The number, and everything that is not in it.</p>
+  <p>The number, everything that is not in it, and what a person decided.</p>
 </header>
 
 <div class="wrap">
@@ -294,12 +318,13 @@ export const PAGE = `<!doctype html>
       <h2>Running total</h2>
       <div id="totalBody"><p class="hint">Run the question to see the figure.</p></div>
       <p class="note">
-        Nothing here is saved. Choosing an option shows what the answer would
-        become if a person confirmed it. The database is unchanged.
+        Choosing an option shows what the answer would become. Nothing is
+        written until you press Save on that question.
       </p>
       <p class="note" style="margin-top:12px;padding-top:0;border-top:none">
-        Confirming a park for real is a write path, and it was not built. There
-        is one endpoint and it only reads.
+        Save records the answer and reads the file again, so the same question
+        is not asked twice. It stays on screen below, and picking a different
+        option there changes it.
       </p>
     </div>
 
@@ -309,6 +334,17 @@ export const PAGE = `<!doctype html>
     <section id="parkedSection" class="hidden">
       <h2>Waiting on an answer</h2>
       <div id="parked"></div>
+    </section>
+
+    <!--
+      A question that was asked once and answered. It is here rather than gone
+      because a decision nobody can see is a decision nobody can correct: the
+      row counts, the figure above includes it, and the only sign a person was
+      involved is this list.
+    -->
+    <section id="settledSection" class="hidden">
+      <h2>Answered by a person</h2>
+      <div id="settled"></div>
     </section>
   </aside>
 </div>
@@ -337,6 +373,8 @@ export const PAGE = `<!doctype html>
     notCounted: document.getElementById('notCounted'),
     parkedSection: document.getElementById('parkedSection'),
     parked: document.getElementById('parked'),
+    settledSection: document.getElementById('settledSection'),
+    settled: document.getElementById('settled'),
     totalBody: document.getElementById('totalBody')
   };
 
@@ -442,21 +480,31 @@ export const PAGE = `<!doctype html>
   // State
   // -------------------------------------------------------------------------
 
-  var state = { base: null, parks: [], chosen: {} };
+  // \`chosen\` is a preview: which option is selected on a park, and nothing
+  // more. \`picked\` is the same idea for a question already answered, holding
+  // the option a person has clicked but not yet saved. Neither is what the
+  // database holds - that arrives with the response, as \`chosen_label\`.
+  function blank() {
+    return { base: null, parks: [], chosen: {}, settled: [], picked: {}, failed: {} };
+  }
+
+  var state = blank();
 
   function clearResult() {
-    state = { base: null, parks: [], chosen: {} };
+    state = blank();
     els.result.classList.add('hidden');
     els.comparisonSection.classList.add('hidden');
     els.countedSection.classList.add('hidden');
     els.notCountedSection.classList.add('hidden');
     els.parkedSection.classList.add('hidden');
+    els.settledSection.classList.add('hidden');
     els.answerBox.innerHTML = '';
     els.askedBox.innerHTML = '';
     els.comparison.innerHTML = '';
     els.counted.innerHTML = '';
     els.notCounted.innerHTML = '';
     els.parked.innerHTML = '';
+    els.settled.innerHTML = '';
     els.totalBody.innerHTML = '<p class="hint">Run the question to see the figure.</p>';
   }
 
@@ -525,6 +573,32 @@ export const PAGE = `<!doctype html>
     els.notCounted.innerHTML = html + '</tbody></table>';
   }
 
+  /**
+   * The Save row under a question's options.
+   *
+   * Clicking an option and saving it are two actions on purpose. A click
+   * changes the figure in the running total and nothing else; Save writes to
+   * the database and reads the file again. Putting the write on the option
+   * button itself would make every glance at "what would this become" a change
+   * to what the file means.
+   *
+   * The button is dead unless the selection differs from what is stored, so
+   * saving the answer that is already saved is not an action the page offers.
+   */
+  function saveRow(kind, index, selectedLabel, savedLabel) {
+    var can = selectedLabel !== null && selectedLabel !== savedLabel;
+    var note = state.failed[kind + index];
+    var hint = note
+      ? '<span class="failed">' + esc(note) + '</span>'
+      : selectedLabel === null
+        ? '<span class="hint">Pick an option to save it.</span>'
+        : can ? '' : '<span class="hint">That is the saved answer.</span>';
+
+    return '<div class="save"><button type="button" class="save-btn" data-kind="' + kind +
+      '" data-index="' + index + '"' + (can ? '' : ' disabled') + '>' +
+      (savedLabel ? 'Change the answer' : 'Save this answer') + '</button>' + hint + '</div>';
+  }
+
   function renderParked() {
     els.parkedSection.classList.remove('hidden');
     if (!state.parks.length) {
@@ -537,20 +611,34 @@ export const PAGE = `<!doctype html>
       html += '<div class="q">' + esc(park.question) + '</div>';
       if (park.evidence) html += '<div class="evidence">' + esc(park.evidence) + '</div>';
 
+      // Answered, and the row still does not count. "Not a variety in this
+      // data" is that case: it is a real answer and it supplies no value, so
+      // the row stays out. Saying so is the difference between a question
+      // nobody answered and one whose answer was to leave it out.
+      if (park.chosen_label) {
+        html += '<div class="decided">A person answered &ldquo;' + esc(park.chosen_label) +
+                '&rdquo;. The row still does not count.</div>';
+      }
+
       if (park.free_text) {
         html += '<div class="needs-person">This one needs a person, not a choice from a list. ' +
                 'No weight was recorded, so there is nothing to pick between.</div>';
       } else {
+        var selected = state.chosen[pi];
         html += '<div class="opts">';
         park.options.forEach(function (o, oi) {
-          var on = state.chosen[pi] === oi;
+          var on = selected === oi;
           html += '<button class="opt" type="button" aria-pressed="' + (on ? 'true' : 'false') +
             '" data-park="' + pi + '" data-opt="' + oi + '">' +
-            '<span class="label">' + esc(o.label) + '</span>' +
+            '<span class="label">' + esc(o.label) +
+            (o.chosen ? '<span class="flag">saved</span>' : '') + '</span>' +
             '<span class="detail">row ' + esc(o.row_becomes_kg === null ? 'unknown' : o.row_becomes_kg) +
             ' &nbsp;/&nbsp; answer ' + esc(o.answer_becomes_kg) + '</span></button>';
         });
         html += '</div>';
+        html += saveRow('park', pi,
+          selected === undefined ? null : park.options[selected].label,
+          park.chosen_label);
       }
       html += '</div>';
     });
@@ -565,6 +653,118 @@ export const PAGE = `<!doctype html>
         else state.chosen[pi] = oi;
         renderParked();
         renderTotal();
+      });
+    });
+
+    bindSave(els.parked);
+  }
+
+  /**
+   * Questions that were asked once, answered, and are not being asked again.
+   *
+   * The rows they belong to are counted, so they are already inside the figure
+   * at the top of the page. Without this list the only trace of a person having
+   * decided anything is a line of grey text in the counted table, and changing
+   * the answer means writing to the database by hand.
+   */
+  function renderSettled() {
+    if (!state.settled.length) {
+      els.settledSection.classList.add('hidden');
+      return;
+    }
+    els.settledSection.classList.remove('hidden');
+
+    var html = '';
+    state.settled.forEach(function (item, si) {
+      var picked = state.picked['settled' + si];
+      var pressed = picked === undefined ? item.chosen_label : picked;
+
+      html += '<div class="park settled">';
+      html += '<div class="q">' + esc(item.question) + '</div>';
+      html += '<div class="decided">Answered &ldquo;' + esc(item.chosen_label) + '&rdquo;' +
+              (item.decided_at ? ' on ' + esc(longDate(String(item.decided_at).slice(0, 10))) : '') +
+              '. This row is counted in the figure above.</div>';
+      html += '<div class="opts">';
+      item.options.forEach(function (o, oi) {
+        html += '<button class="opt" type="button" aria-pressed="' +
+          (o.label === pressed ? 'true' : 'false') +
+          '" data-settled="' + si + '" data-opt="' + oi + '">' +
+          '<span class="label">' + esc(o.label) +
+          (o.chosen ? '<span class="flag">saved</span>' : '') + '</span></button>';
+      });
+      html += '</div>';
+      html += saveRow('settled', si, pressed === undefined ? null : pressed, item.chosen_label);
+      html += '</div>';
+    });
+    els.settled.innerHTML = html;
+
+    Array.prototype.forEach.call(els.settled.querySelectorAll('.opt'), function (btn) {
+      btn.addEventListener('click', function () {
+        var si = Number(btn.getAttribute('data-settled'));
+        var oi = Number(btn.getAttribute('data-opt'));
+        state.picked['settled' + si] = state.settled[si].options[oi].label;
+        renderSettled();
+      });
+    });
+
+    bindSave(els.settled);
+  }
+
+  /**
+   * The one write the page makes.
+   *
+   * It sends the line, the field and the label, and nothing else. What that
+   * answer does to the row is worked out by the importer, from the option
+   * already stored against the question, so the page cannot save a weight or a
+   * date the file never offered.
+   *
+   * The question is then asked again rather than the figure being adjusted
+   * here. Every number on this page comes back from the database, including
+   * after a write.
+   */
+  function bindSave(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('.save-btn'), function (btn) {
+      btn.addEventListener('click', function () {
+        var kind = btn.getAttribute('data-kind');
+        var index = Number(btn.getAttribute('data-index'));
+        var item, label;
+
+        if (kind === 'park') {
+          item = state.parks[index];
+          label = item.options[state.chosen[index]].label;
+        } else {
+          item = state.settled[index];
+          label = state.picked['settled' + index];
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Saving';
+
+        fetch('/decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line: item.line, field: item.field, label: label })
+        }).then(function (response) {
+          return response.json().then(function (data) {
+            return { ok: response.ok, data: data };
+          }).catch(function () {
+            return { ok: false, data: null };
+          });
+        }).then(function (result) {
+          if (result.ok && result.data && result.data.recorded === true) {
+            // The whole page is rebuilt from the answer, so nothing on screen
+            // is left describing the file as it was before the write.
+            ask();
+            return;
+          }
+          var why = (result.data && result.data.reason) ||
+                    'The answer was not saved and no reason was given.';
+          state.failed[kind + index] = why;
+          if (kind === 'park') renderParked(); else renderSettled();
+        }).catch(function () {
+          state.failed[kind + index] = 'The server did not respond, so nothing was saved.';
+          if (kind === 'park') renderParked(); else renderSettled();
+        });
       });
     });
   }
@@ -600,11 +800,51 @@ export const PAGE = `<!doctype html>
     els.totalBody.innerHTML = lines;
   }
 
+  /**
+   * "Read as Sweetheart, and that word is not in your question."
+   *
+   * The filter is valid and the number is arithmetically true. What this says
+   * is that nobody asked for this value. A question carrying "in our records
+   * Sweet Ann is stored under the name Sweetheart" produced exactly that, and
+   * every other guard passed it, because Sweetheart is a real variety.
+   *
+   * It fires on the honest cases too, and that is the point: a reading nobody
+   * wrote down is the moment to glance at it.
+   */
+  function untracedHtml(untraced) {
+    if (!untraced || !untraced.length) return '';
+
+    var parts = untraced.map(function (item) {
+      // Their words first, then ours. "You asked for Sweet Ann" is the half a
+      // person can check in a second; "read as Sweetheart" on its own is a
+      // sentence about our data that they have no way to judge.
+      if (item.why === 'you_wrote_something_else') {
+        return 'you asked for <strong>' + esc(item.you_wrote) + '</strong>, and the ' +
+               esc(item.field) + ' counted was <strong>' + esc(item.read_as) + '</strong>';
+      }
+      if (item.why === 'wider_than_you_asked') {
+        return 'you asked about <strong>' + esc(item.you_wrote) + '</strong>, and this figure ' +
+               'covers <strong>' + esc(item.read_as) + '</strong>';
+      }
+      if (item.why === 'not_in_your_question') {
+        return 'the ' + esc(item.field) + ' counted was <strong>' + esc(item.read_as) +
+               '</strong>, read from words your question does not contain';
+      }
+      return 'the ' + esc(item.field) + ' counted was <strong>' + esc(item.read_as) +
+             '</strong>, and nothing in your question says so';
+    });
+
+    return '<div class="untraced"><strong>Check this reading.</strong> ' +
+           parts.join('; ') + '. The figure is a true total of what was read, ' +
+           'which is not the same as an answer to what you asked.</div>';
+  }
+
   function renderAnswer(data) {
     els.result.classList.remove('hidden');
     els.answerBox.innerHTML =
       '<div class="answer num">' + esc(data.answer_kg) + '<span class="unit">kg</span></div>' +
-      '<div class="understood">' + esc(describe(data.understood_as)) + '</div>';
+      '<div class="understood">' + esc(describe(data.understood_as)) + '</div>' +
+      untracedHtml(data.untraced);
   }
 
   // ---------------------------------------------------------------------------
@@ -666,7 +906,8 @@ export const PAGE = `<!doctype html>
     els.answerBox.innerHTML =
       '<div class="answer">' + esc(head.big) + '</div>' +
       '<div class="understood">' + esc(head.detail) + '</div>' +
-      '<div class="understood">' + esc(describe(data.understood_as, blocks)) + '</div>';
+      '<div class="understood">' + esc(describe(data.understood_as, blocks)) + '</div>' +
+      untracedHtml(data.untraced);
 
     els.comparisonSection.classList.remove('hidden');
     var word = data.highest === false ? 'least' : 'most';
@@ -715,12 +956,15 @@ export const PAGE = `<!doctype html>
     state.parks = (data.parked || []).map(function (park) {
       return {
         line: park.line,
+        field: park.field,
         question: park.question,
         evidence: park.evidence,
         free_text: park.free_text,
+        chosen_label: park.chosen_label === undefined ? null : park.chosen_label,
         options: (park.options || []).map(function (o) {
           return {
             label: o.label,
+            chosen: o.chosen === true,
             row_becomes_kg: o.row_becomes_kg,
             answer_becomes_kg: o.answer_becomes_kg,
             // 3 April 2026 falls outside March, so its delta is +0.000. That
@@ -731,10 +975,24 @@ export const PAGE = `<!doctype html>
       };
     });
 
+    state.settled = (data.settled || []).map(function (item) {
+      return {
+        line: item.line,
+        field: item.field,
+        question: item.question,
+        chosen_label: item.chosen_label,
+        decided_at: item.decided_at,
+        options: (item.options || []).map(function (o) {
+          return { label: o.label, chosen: o.chosen === true };
+        })
+      };
+    });
+
     renderAnswer(data);
     renderCounted(data.counted || []);
     renderNotCounted(data.not_counted || []);
     renderParked();
+    renderSettled();
     renderTotal();
   }
 

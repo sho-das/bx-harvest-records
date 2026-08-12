@@ -23,22 +23,34 @@ import {
 import {
   readBlock,
   readVariety,
+  resolveFromPeers,
+  BLOCK_SPELLINGS,
+  VARIETY_SPELLINGS,
   UNIT_FACTOR_KG,
   BLOCK_UNIT_HABIT,
   SOURCE_FILE,
+  VARIETIES,
+  squashed,
   type Block,
   type Unit,
+  type Variety,
 } from './rules';
 
 type PendingQuestion = {
-  field: 'unit' | 'harvest_date' | 'quantity';
+  field: 'unit' | 'harvest_date' | 'quantity' | 'duplicate' | 'variety';
   question: string;
   evidence: string | null;
   freeText: boolean;
-  options: { label: string; quantityKg: string | null; harvestDate: string | null }[];
+  options: {
+    label: string;
+    quantityKg: string | null;
+    harvestDate: string | null;
+    variety?: string | null;
+    keepsRowOut?: boolean;
+  }[];
 };
 
-type PendingRow = {
+export type PendingRow = {
   sourceLine: number;
   raw: {
     block: string | null;
@@ -55,8 +67,48 @@ type PendingRow = {
   quantityValue: string | null;
   unitFactor: string | null;
   status: 'counted' | 'parked' | 'not_a_record';
+  /** Why a value the tables did not know was read the way it was. */
+  resolvedNote: string | null;
   questions: PendingQuestion[];
 };
+
+/**
+ * What a person already decided, so nobody is asked the same question twice.
+ *
+ * Applied on import: the row counts with the decided value, and the question
+ * still comes back with that option marked so it can be changed.
+ */
+export type Decision = {
+  scope: 'spelling' | 'row';
+  field: string;
+  subject: string;
+  chosenLabel: string;
+  quantityKg: string | null;
+  harvestDate: string | null;
+  variety: string | null;
+};
+
+export type Decisions = Map<string, Decision>;
+
+export const decisionKey = (scope: string, field: string, subject: string): string =>
+  `${scope}|${field}|${subject}`;
+
+/**
+ * A row as its writer spelled it: block, variety, date and quantity.
+ *
+ * Not the line number. A grower who re-exports with one row inserted moves
+ * every line below it, and every decision keyed on a line would land on the
+ * wrong row. What the row says does not move.
+ *
+ * Two rows identical in all four fields share a subject, which is right: the
+ * same question about the same pair has the same answer, and that pair is
+ * exactly the duplicate case.
+ */
+export function rowSubject(raw: PendingRow['raw']): string {
+  return [raw.block, raw.variety, raw.harvestDate, raw.quantity]
+    .map((value) => (value ?? '').trim().toLowerCase())
+    .join('|');
+}
 
 export type ImportReport = {
   linesRead: number;
@@ -129,7 +181,92 @@ function dateEvidence(rows: PendingRow[]): string {
   );
 }
 
-function buildRows(csv: string): PendingRow[] {
+/**
+ * Values the lookup tables do not know, read from the rest of the file.
+ *
+ * Line 7 says `sweethart`. That was a hand-written entry in `VARIETY_SPELLINGS`
+ * and it is not any more, because one entry per typo does not survive the
+ * second file. The reason it was ever safe to accept is the reason it is
+ * accepted now: R Craig, who wrote it, writes `Sweetheart` on his six other
+ * rows and no other variety at all.
+ *
+ * The peer group is the grader. A person's own spelling on their own rows is
+ * the strongest thing this file has, and it is the one `02-decisions.md` gave
+ * for line 7 in the first place. Blocks are tried first, because a variety can
+ * fall back to what the rest of that block grows and a block cannot fall back
+ * to anything.
+ *
+ * When the file cannot settle it - no peers, a tie, or the token is too far
+ * from anything - the value is left unread, and the row parks exactly as it
+ * would have before. Nothing here invents a reading, and every reading it does
+ * make is written into `resolved_note` so the customer can see the reason.
+ */
+function resolveFromTheRestOfTheFile(rows: PendingRow[]): void {
+  const records = rows.filter((row) => row.status !== 'not_a_record');
+  const notes = new Map<number, string[]>();
+
+  const noteFor = (row: PendingRow, text: string) => {
+    const existing = notes.get(row.sourceLine) ?? [];
+    existing.push(text);
+    notes.set(row.sourceLine, existing);
+  };
+
+  /** Rows by the same grader, excluding this one. */
+  const bySameGrader = (row: PendingRow) =>
+    records.filter((peer) => peer !== row && peer.raw.grader && peer.raw.grader === row.raw.grader);
+
+  for (const row of records) {
+    if (row.block === null && row.raw.block) {
+      const peers = bySameGrader(row);
+      const known = peers.map((peer) => peer.block).filter((b): b is Block => b !== null);
+      const resolved = resolveFromPeers(row.raw.block, BLOCK_SPELLINGS, known);
+      if (resolved) {
+        row.block = resolved;
+        noteFor(
+          row,
+          `block written ${JSON.stringify(row.raw.block)}, read as ${resolved}: ` +
+            `${row.raw.grader} works ${resolved} on ${known.filter((b) => b === resolved).length} other rows and no other block`,
+        );
+      }
+    }
+  }
+
+  for (const row of records) {
+    if (row.variety !== null || !row.raw.variety) continue;
+
+    // The grader first. Their own rows are the evidence 02-decisions.md gave
+    // for line 7, and a person is a narrower group than a block.
+    let peers = bySameGrader(row);
+    let group = row.raw.grader ?? 'the same grader';
+
+    if (!peers.some((peer) => peer.variety !== null) && row.block !== null) {
+      peers = records.filter((peer) => peer !== row && peer.block === row.block);
+      group = `Block ${row.block}`;
+    }
+
+    const known = peers.map((peer) => peer.variety).filter((v): v is Variety => v !== null);
+    const resolved = resolveFromPeers(row.raw.variety, VARIETY_SPELLINGS, known);
+    if (!resolved) continue;
+
+    const matching = known.filter((variety) => variety === resolved).length;
+    const others = new Set(known.filter((variety) => variety !== resolved)).size;
+
+    row.variety = resolved;
+    noteFor(
+      row,
+      `variety written ${JSON.stringify(row.raw.variety)}, read as ${resolved}: ` +
+        `${group} writes ${resolved} on ${matching} other rows` +
+        (others === 0 ? ' and no other variety' : ''),
+    );
+  }
+
+  for (const row of records) {
+    const written = notes.get(row.sourceLine);
+    if (written) row.resolvedNote = written.join('; ');
+  }
+}
+
+export function buildRows(csv: string, decisions: Decisions = new Map()): PendingRow[] {
   const lines = csv.split(/\r?\n/);
   const rows: PendingRow[] = [];
 
@@ -163,6 +300,7 @@ function buildRows(csv: string): PendingRow[] {
         quantityValue: null,
         unitFactor: null,
         status: 'not_a_record',
+        resolvedNote: null,
         questions: [],
       });
       continue;
@@ -177,9 +315,12 @@ function buildRows(csv: string): PendingRow[] {
       quantityValue: null,
       unitFactor: null,
       status: 'counted',
+      resolvedNote: null,
       questions: [],
     });
   }
+
+  resolveFromTheRestOfTheFile(rows);
 
   // Second pass: resolve the values, now that the whole file is available to
   // build evidence sentences from.
@@ -261,7 +402,233 @@ function buildRows(csv: string): PendingRow[] {
     });
   }
 
+  parkUnevidencedDuplicates(rows);
+  parkUnresolvedVarieties(rows);
+  applyDecisions(rows, decisions);
+
   return rows;
+}
+
+/**
+ * A variety the tables do not know and the file cannot settle.
+ *
+ * Nothing in the shipped file reaches here: `sweethart` is resolved from
+ * R Craig's own rows. `Swithart` would, at three edits, and so would any real
+ * cultivar nobody has loaded.
+ *
+ * Every variety is offered, not just the nearest. Showing one candidate hides
+ * that the other two were considered and rejected, and the customer cannot
+ * check a shortlist they cannot see. The last option is the one that makes the
+ * list honest: a token that is not a typo at all has no right answer on this
+ * list, and offering only real varieties would offer only wrong answers.
+ */
+function parkUnresolvedVarieties(rows: PendingRow[]): void {
+  for (const row of rows) {
+    if (row.status === 'not_a_record') continue;
+    if (row.variety !== null || !row.raw.variety) continue;
+    if (row.questions.some((question) => question.field === 'variety')) continue;
+
+    // What the rest of this block grows. `resolveFromTheRestOfTheFile` reaches
+    // for the block only when the grader's own rows carry no variety at all,
+    // so this group is one it may never have tried. It supplies the evidence
+    // sentence and never the value: a name that reaches here has already been
+    // declined once, and the customer is the one who decides.
+    const grader = row.raw.grader ?? 'The grader';
+    const block = row.block;
+    const nearest = block
+      ? resolveFromPeers(
+          row.raw.variety,
+          VARIETY_SPELLINGS,
+          rows
+            .filter((peer) => peer !== row && peer.block === block)
+            .map((peer) => peer.variety)
+            .filter((v): v is Variety => v !== null),
+        )
+      : null;
+
+    row.status = 'parked';
+    row.questions.push({
+      field: 'variety',
+      question:
+        `Line ${row.sourceLine} says ${JSON.stringify(row.raw.variety)}, which is not a variety ` +
+        `in this data. Which variety was it?`,
+      // "close, but not close enough" was wrong here and said so out loud. A
+      // name only reaches this branch when the block's other rows do put it
+      // within reach, and the reading was declined because the grader's own
+      // rows are the narrower evidence and they point elsewhere. Saying the
+      // name is too far would tell the customer something untrue about their
+      // own file.
+      evidence: nearest
+        ? `The closest name on the other rows in Block ${block?.slice(1)} is ${nearest}. ` +
+          `${grader} wrote this row, and their own rows do not settle it, so nothing read it ` +
+          `for you.`
+        : `No variety in this data is close to it. ${grader} wrote it, ` +
+          `and it may be a variety this file has never carried.`,
+      freeText: false,
+      options: [
+        ...VARIETIES.map((variety) => ({
+          label: variety,
+          quantityKg: null,
+          harvestDate: null,
+          variety,
+        })),
+        {
+          label: 'Not a variety in this data, do not count it',
+          quantityKg: null,
+          harvestDate: null,
+          variety: null,
+          keepsRowOut: true,
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Apply what a person already said, so the question is asked once and not
+ * every time the file is imported.
+ *
+ * Spelling decisions are looked up by the token, so `sweethart means
+ * Sweetheart` improves every future import. Row decisions are looked up by
+ * what the row says, so they follow the row rather than its line number.
+ *
+ * The question stays attached after the decision is applied. The row counts,
+ * and the response shows the chosen option next to the others, because a
+ * decision a person cannot see is a decision they cannot correct.
+ */
+function applyDecisions(rows: PendingRow[], decisions: Decisions): void {
+  if (decisions.size === 0) return;
+
+  for (const row of rows) {
+    if (row.status === 'not_a_record') continue;
+
+    // Spelling first: resolving the variety can remove the need for the park
+    // that would otherwise ask about it.
+    if (row.variety === null && row.raw.variety) {
+      const spelling = decisions.get(
+        decisionKey('spelling', 'variety', squashed(row.raw.variety)),
+      );
+      if (spelling?.variety) {
+        row.variety = spelling.variety;
+        row.resolvedNote =
+          `variety written ${JSON.stringify(row.raw.variety)}, read as ${spelling.variety}: ` +
+          `confirmed by a person`;
+        // The question is not removed. Dropping it counted the row and left
+        // nothing on screen saying a person had decided anything, so the only
+        // way to change the answer was to write to the database by hand. The
+        // check below turns the row to counted; the question comes back under
+        // "answered by a person" with this option marked.
+      }
+    }
+
+    for (const question of row.questions) {
+      const decision = decisions.get(decisionKey('row', question.field, rowSubject(row.raw)));
+      if (!decision) continue;
+
+      if (decision.quantityKg !== null) {
+        // Already kilograms, so the factor is 1. The row's own unit is not
+        // reapplied to a figure a person gave in kilograms.
+        row.quantityValue = decision.quantityKg;
+        row.unitFactor = '1';
+      }
+      if (decision.harvestDate !== null) row.harvestDate = decision.harvestDate;
+      if (decision.variety !== null) row.variety = decision.variety;
+    }
+
+    const settled =
+      row.block !== null &&
+      row.variety !== null &&
+      row.harvestDate !== null &&
+      row.quantityValue !== null &&
+      row.unitFactor !== null;
+
+    if (settled && row.questions.length > 0) row.status = 'counted';
+  }
+}
+
+/**
+ * Two rows that could be one row, where nothing in the file says which.
+ *
+ * Lines 16 and 17 are the same block, the same variety, the same date and the
+ * same grader, for 1150 kg and 1105 kg. Line 17 says "re-weighed after
+ * grading", and that note is the only reason this system knows the second row
+ * replaces the first rather than joining it.
+ *
+ * Take the note away and there are three readings, all ordinary:
+ *
+ *   - two pickings from one block in one day, which is 4,320.000
+ *   - line 17 is a re-weigh of line 16, which is 3,170.000
+ *   - line 16 is the good weight and line 17 is the duplicate, 3,215.000
+ *
+ * Nothing settles it. Adjacent line numbers fit a correction typed straight
+ * afterwards and fit two loads recorded in order. Line 17 being 45 kg lighter
+ * fits grading losses and fits a smaller second picking.
+ *
+ * What this stops is the silent version. Without the note the old code counted
+ * both rows and returned 4,320.000 with no question attached, because nothing
+ * had linked them. Counting both is a decision, not a neutral outcome, and it
+ * is the one the code was making whenever the evidence was missing.
+ *
+ * The earlier row parks, so the base answer holds at 3,170.000 either way and
+ * the note now changes what the customer is told rather than what they are
+ * charged. Two options, not three: if either row is a correction it is the
+ * later one, because this file appends and never rewrites, and that is
+ * evidence rather than certainty, so the customer still decides whether it is
+ * a correction at all.
+ */
+function parkUnevidencedDuplicates(rows: PendingRow[]): void {
+  const groups = new Map<string, PendingRow[]>();
+
+  for (const row of rows) {
+    if (row.status !== 'counted') continue;
+    if (!row.block || !row.variety || !row.harvestDate) continue;
+    if (row.quantityValue === null || row.unitFactor === null) continue;
+
+    const key = `${row.block}|${row.variety}|${row.harvestDate}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+
+    // The note settles it, so linkSupersedes does the work in SQL and this
+    // rule stays out of the way. Only an unevidenced group reaches a customer.
+    if (group.some((row) => /re-weigh/i.test(row.raw.notes ?? ''))) continue;
+
+    const ordered = [...group].sort((a, b) => a.sourceLine - b.sourceLine);
+    const latest = ordered[ordered.length - 1];
+
+    for (const row of ordered.slice(0, -1)) {
+      const kg = multiplyExact(row.quantityValue as string, row.unitFactor as string);
+
+      row.status = 'parked';
+      row.questions.push({
+        field: 'duplicate',
+        question:
+          `Lines ${row.sourceLine} and ${latest.sourceLine} are the same block, variety and date, ` +
+          `for ${row.raw.quantity} and ${latest.raw.quantity}. Were these two pickings, or was ` +
+          `line ${row.sourceLine} replaced by line ${latest.sourceLine}?`,
+        evidence:
+          `Both rows were written by ${row.raw.grader ?? 'the same grader'} and no note says either ` +
+          `is a correction. Two pickings from one block in one day is ordinary, and so is a ` +
+          `re-weigh entered on the next line. Line ${latest.sourceLine} is the later of the two, ` +
+          `and this file appends rather than rewrites, so if either is a correction it is that one.`,
+        freeText: false,
+        options: [
+          {
+            label: `Two pickings, count line ${row.sourceLine} as well`,
+            quantityKg: kg,
+            harvestDate: null,
+          },
+          {
+            label: `Replaced by line ${latest.sourceLine}, do not count it`,
+            quantityKg: '0',
+            harvestDate: null,
+          },
+        ],
+      });
+    }
+  }
 }
 
 /**
@@ -297,12 +664,12 @@ const INSERT_ROW = `
     source_file, source_line,
     block_raw, variety_raw, harvest_date_raw, quantity_raw, unit_raw, grader_raw, notes,
     block, variety, harvest_date, quantity_kg,
-    status
+    status, resolved_note, row_subject, variety_subject
   ) VALUES (
     $1, $2,
     $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12::date, ($13::numeric * $14::numeric),
-    $15::record_status
+    $15::record_status, $16, $17, $18
   )
   RETURNING id
 `;
@@ -324,6 +691,9 @@ async function writeRow(client: PoolClient, row: PendingRow): Promise<number> {
     row.quantityValue,
     row.unitFactor,
     row.status,
+    row.resolvedNote,
+    rowSubject(row.raw),
+    row.raw.variety ? squashed(row.raw.variety) : null,
   ]);
   return result.rows[0].id as number;
 }
@@ -343,9 +713,14 @@ async function writeQuestions(
 
     for (const [index, option] of question.options.entries()) {
       await client.query(
-        `INSERT INTO parked_option (question_id, label, sort_order, quantity_kg, harvest_date)
-         VALUES ($1, $2, $3, $4::numeric, $5::date)`,
-        [questionId, option.label, index, option.quantityKg, option.harvestDate],
+        `INSERT INTO parked_option
+           (question_id, label, sort_order, quantity_kg, harvest_date, variety, keeps_row_out)
+         VALUES ($1, $2, $3, $4::numeric, $5::date, $6, $7)`,
+        [
+          questionId, option.label, index,
+          option.quantityKg, option.harvestDate,
+          option.variety ?? null, option.keepsRowOut === true,
+        ],
       );
     }
   }
@@ -444,12 +819,41 @@ async function linkCorrections(
 // Entry point
 // ---------------------------------------------------------------------------
 
+/** Every decision a person has recorded, keyed for lookup during the build. */
+export async function loadDecisions(client: PoolClient): Promise<Decisions> {
+  const result = await client.query(
+    `SELECT scope, field, subject, chosen_label,
+            quantity_kg::text AS quantity_kg,
+            harvest_date::text AS harvest_date,
+            variety
+       FROM decision`,
+  );
+
+  const decisions: Decisions = new Map();
+  for (const row of result.rows) {
+    decisions.set(decisionKey(row.scope, row.field, row.subject), {
+      scope: row.scope,
+      field: row.field,
+      subject: row.subject,
+      chosenLabel: row.chosen_label,
+      quantityKg: row.quantity_kg,
+      harvestDate: row.harvest_date,
+      variety: row.variety,
+    });
+  }
+  return decisions;
+}
+
 export async function importCsv(path: string): Promise<ImportReport> {
   const csv = readFileSync(path, 'utf8');
-  const rows = buildRows(csv);
 
   const client = await getPool().connect();
   try {
+    // Loaded before the rows are built, because a decision can settle a value
+    // and remove the question that would otherwise have been asked about it.
+    const decisions = await loadDecisions(client);
+    const rows = buildRows(csv, decisions);
+
     await client.query('BEGIN');
 
     // Re-running the import replaces this file's rows rather than doubling
