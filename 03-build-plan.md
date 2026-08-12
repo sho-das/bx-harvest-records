@@ -291,8 +291,9 @@ match what got built. What differs:
 - **Five queries per request, not three.** Counted rows, rows left out and
   parked rows each needed their own statement, plus a source summary so the
   response can say 26 rows were read.
-- **39 tests, not eight.** The eight parser tests are all there. The rest cover
-  the model layer, which this plan did not think about.
+- **45 tests, not eight.** The eight parser tests are all there. The rest cover
+  the model layer and the block comparison, neither of which this plan thought
+  about.
 - **A page at `GET /`.** Not in this plan. C2 was cut, as the plan said it
   would be, and the page went into that slot. A JSON response does not show
   that picking two options gives 5,560.000 and not 4,380.000.
@@ -311,3 +312,20 @@ match what got built. What differs:
 
 The order of work held and all three checkpoints held. The mock provider was
 built early rather than last, which is in `DECISIONS.md`.
+
+**Two things added after the assessment build:**
+
+- **A second question shape: which block, not how much.** The plan assumed one
+  filter and one number. "Which block picked the most Sweetheart in March
+  2026?" has a block for an answer, so the response drops `answer_kg` entirely
+  and carries `answer_block` and `by_block` instead. Still five queries: four
+  per-block totals and one that ranks them. Two model fields drive it,
+  `block_comparison` and `highest`, and the direction is a field rather than an
+  assumption because answering "least" with the most is a wrong answer, not an
+  untidy one. That bug shipped in the first version and was found by asking the
+  live endpoint, not by reading the code.
+- **The page is a route, not a file.** `public/index.html` became
+  `src/ui/page.ts`, a string the controller returns. `tsc` is the only build
+  step here and it does not copy assets, so a `.html` file under `src/`
+  compiled to nothing and the route had to guess a path at request time - one
+  guess for the compiled output, another for `tsx`.
