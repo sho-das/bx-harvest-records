@@ -14,9 +14,16 @@ as the record of what was checked and what it found.
 - Parked rows: the file does not settle three of the seven Block 3 Sweetheart
   rows, so each comes back as a question with options, and each option is
   priced.
-- A page at `GET /`. One HTML file, plain CSS, vanilla JS, no build step and no
-  new dependency. It calls `/ask` and nothing else.
-- 39 unit tests, a check constraint in Postgres, and `npm run verify` (28 checks
+- A page at `GET /`. Plain CSS, vanilla JS, no build step and no new
+  dependency. It calls `/ask` and nothing else. The markup is a string in
+  `src/ui/page.ts` rather than a `.html` file, because `tsc` is the only build
+  step here and it does not copy assets.
+- Comparing the blocks. "Which block picked the most Sweetheart in March 2026?"
+  is answered by a block, not a weight, so that response carries no `answer_kg`
+  at all. `block_comparison` says the blocks are being compared and `highest`
+  says which end. All four blocks come back every time, including one at
+  `0.000`.
+- 45 unit tests, a check constraint in Postgres, and `npm run verify` (38 checks
   against the loaded data).
 
 ## What I deliberately did not build
@@ -200,7 +207,7 @@ The customer's own sentence supplies the other half.
 
 Three layers, each catching what the others cannot.
 
-1. **39 unit tests**, each named after a real line in the CSV or a way the model
+1. **45 unit tests**, each named after a real line in the CSV or a way the model
    layer can fail. Two assert a negative, because the negative is the decision:
    `record lost` must not equal 0, and a blank unit must not equal kg. One is a
    property test rather than an example: it pushes a sentinel string through
@@ -210,7 +217,7 @@ Three layers, each catching what the others cannot.
 2. **A check constraint in Postgres.** A row cannot be `counted` unless block,
    variety, date and kilograms are all present. It lives in the database, so no
    code path avoids it. I probed it both ways.
-3. **`npm run verify`, 28 checks,** including a diagnostic table. Three rows can
+3. **`npm run verify`, 38 checks,** including a diagnostic table. Three rows can
    each be wrongly added and one wrongly dropped, and each mistake produces its
    own number: 2,180 means the `sweethart` lookup did not fire; 4,320 means line
    16 was not superseded; 4,350 means the date was read as 4 March; 4,380 means
@@ -360,8 +367,8 @@ crude authority impersonation failed where a quietly stated false fact worked.
   `understood_as` shows the reading, but it is grey text under a large number,
   and I do not think a customer in a hurry reads it. See the section above.
 - **Two `as` casts on query results.**
-  [`queries.ts:124`](src/ask/queries.ts#L124) and
-  [`:170`](src/ask/queries.ts#L170) cast `result.rows` to their row type with no
+  [`queries.ts:199`](src/ask/queries.ts#L199) and
+  [`:245`](src/ask/queries.ts#L245) cast `result.rows` to their row type with no
   check, while `selectParkedRows` builds each row field by field. Nothing else
   here crosses a boundary unchecked - the model's output goes through zod - and
   these two lines are the exception. The SQL names every column, so the shape is

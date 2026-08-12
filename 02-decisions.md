@@ -273,6 +273,31 @@ Cost, and it is real: `nest build`, `nest start --watch` and `nest generate` do 
 
 Second cost: `vitest` runs the tests instead of `jest`. A NestJS reviewer expects jest. The parsers are plain functions with no dependency injection, so nothing in the test file would change under jest, but it is a difference from what the stack implies.
 
+### D7. A second question shape, added after the assessment build
+
+"Which block picked the most Sweetheart in March 2026?" does not fit the shape everything above assumes. One filter produces one number, and the answer here is a block.
+
+Two fields on the model's filter carry it. `block_comparison` says the blocks are being compared. `highest` says which end: true for most, largest, best; false for least, smallest, worst.
+
+Reason for two fields rather than one direction string: it is what the shape of the request already looked like, and a boolean pair is the smaller change to a schema that is checked twice. The cost is a state that cannot happen but can be written down - `block_comparison: false` beside `highest: true` - and `describeFilter` answers it by returning `highest: null` whenever no comparison ran.
+
+Four decisions inside it:
+
+- **Five queries, not one `GROUP BY`.** B4 harvested no Sweetheart in March. `GROUP BY block` returns three rows and drops it, and a block missing from a comparison is a block the customer never learns was empty. Four separate calls to the existing `selectAnswerKg` return `0.000` for B4 because of the `COALESCE` already there. The fifth query ranks them.
+- **Postgres picks the extreme.** The per-block figures cross as strings, for the same reason every other figure does. The largest of `"4445.000"`, `"1002.439"` and `"999.000"` in string order is the wrong one, and it is only right today because every value happens to have four digits before the point.
+- **No `answer_kg` in the response.** The question was "which block". A weight beside the block name would be a number nobody asked for, in the place a customer reads the answer.
+- **`answer_block` is a list.** Two blocks level at the top return both, flagged `tied`. Every block at zero is a four-way tie, which is the honest answer to "which picked the most" when nothing was picked anywhere.
+
+The direction being a field rather than an assumption is not theoretical. The first version only knew the maximum, and "which block picked the least" answered B1, the block that picked the most. It was found by asking the live endpoint, not by reading the code.
+
+### D8. The page is a route, not a file
+
+`public/index.html` became `src/ui/page.ts`, a string the controller returns.
+
+Reason: `tsc` is the only build step in this project and it does not copy assets. A `.html` file under `src/` compiles to nothing, so the controller had to find it on disk at request time and guess the path - one guess for the compiled output in `dist`, another for running under `tsx`. Holding the page in TypeScript means it lands in `dist` with everything else and the route has nothing to look up.
+
+Cost: no HTML syntax highlighting in that file, and a page change needs a rebuild rather than a browser refresh.
+
 ## E. What gets cut, in order
 
 If the clock is against me at 1:55, stop building and start writing. An unfinished feature with an honest note beats a finished feature with no document.
